@@ -3,13 +3,13 @@
     "listen": "0.0.0.0:12348",
     "encrypt": false,
     "decrypt": true,
-    "key": "7KLATbTIJWPDWaL2",
+    "key": "GIF34US6WlaL4Ayx",
     "upstream": {
       "name": "",
       "url": "10.42.0.1:12348",
       "encrypt": true,
       "decrypt": false,
-      "key": "7KLATbTIJWPDWaL2"
+      "key": "GIF34US6WlaL4Ayx"
     }
   }
 
