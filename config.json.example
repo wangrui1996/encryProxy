@@ -2,12 +2,16 @@
   "proxy": {
     "listen": "0.0.0.0:12348",
     "encrypt": false,
-    "decrypt": true,
+    "decrypt": false,
     "key": "GIF34US6WlaL4Ayx",
+    "rate_limit": {
+      "up_kbps": 0,
+      "down_kbps": 1024
+    },
     "upstream": {
       "name": "",
-      "url": "10.42.0.1:12348",
-      "encrypt": true,
+      "url": "10.44.0.10:3022",
+      "encrypt": false,
       "decrypt": false,
       "key": "GIF34US6WlaL4Ayx"
     }
