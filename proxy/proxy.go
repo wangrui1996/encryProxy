@@ -1,14 +1,8 @@
 package proxy
 
 import (
-	"bufio"
-	"io"
-	"context"
 	"net"
 	"sync"
-	"time"
-	"sync/atomic"
-	"golang.org/x/time/rate"
 	com "wangjui.com/enproxy/common"
 )
 
@@ -16,15 +10,9 @@ type Config struct {
 	Proxy ProxyConfig `json:"proxy"`
 }
 
-type RateLimitConfig struct {
-	UploadKbps   int `json:"up_kbps"`   // 上行限速 KB/s
-	DownloadKbps int `json:"down_kbps"` // 下行限速 KB/s
-}
-
 type ProxyConfig struct {
 	Listen string `json:"listen"`
-	Encrypt bool `json:"encrypt"`
-	Decrypt bool `json:"decrypt"`
+	CryptoEnabled bool `json:"crypto_enabled"`
 	Key string `json:"key"`
 	RateLimit      RateLimitConfig `json:"rate_limit"`
 	Upstream UpstreamConfig `json:"upstream"`
@@ -33,233 +21,195 @@ type ProxyConfig struct {
 type UpstreamConfig struct {
 	Name string `json:"name"`
 	Url string `json:"url"`
-	Encrypt bool `json:"encrypt"`
-	Decrypt bool `json:"decrypt"`
+	CryptoEnabled bool `json:"crypto_enabled"`
 	Key string `json:"key"`
 }
 
 type Proxy struct {
 	config ProxyConfig
-	uploadLimiter   *rate.Limiter // 全局上行限流器
-	downloadLimiter *rate.Limiter
-	currentSecUploadBytes   int64 // 当前秒累计上传字节数
-	currentSecDownloadBytes int64 // 当前秒累计下载字节数
+	rateLimit *RateLimit // 限速模块
+	traffic *Traffic // 流量统计模块
 }
-
-type RateLimitedConn struct {
-	net.Conn
-	proxy *Proxy
-}
-
-func (c *RateLimitedConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if n > 0 {
-		atomic.AddInt64(&c.proxy.currentSecUploadBytes, int64(n))
-
-		if c.proxy.downloadLimiter != nil { // 注意：限流器本身的逻辑保持不变
-			_ = c.proxy.downloadLimiter.WaitN(context.Background(), n)
-		}
-	}
-	return n, err
-}
-
-func (c *RateLimitedConn) Write(b []byte) (int, error) {
-	if len(b) > 0 {
-		atomic.AddInt64(&c.proxy.currentSecDownloadBytes, int64(len(b)))
-
-		if c.proxy.uploadLimiter != nil {
-			_ = c.proxy.uploadLimiter.WaitN(context.Background(), len(b))
-		}
-	}
-	return c.Conn.Write(b)
-}
-
-
 
 func NewProxy(cfg *Config) *Proxy {
-    proxy := &Proxy{
-        config: cfg.Proxy,
+	p := &Proxy{
+		config:    cfg.Proxy,
+		rateLimit: NewRateLimit(cfg.Proxy.RateLimit),
+		traffic:   NewTraffic(cfg.Proxy.Listen),
 	}
 
-    // 在创建 Proxy 时，初始化【全局/端口级别】限流器
-    if cfg.Proxy.RateLimit.UploadKbps > 0 {
-		limit := rate.Limit(cfg.Proxy.RateLimit.UploadKbps * 1024)
-		// burst 设置大一点，允许突发流量平滑通过
-		//proxy.uploadLimiter = rate.NewLimiter(limit, int(limit)*2)
-		proxy.uploadLimiter = rate.NewLimiter(limit, int(limit))
-		com.Log.Infof("Global Upload rate limit enabled: %d KB/s", cfg.Proxy.RateLimit.UploadKbps)
-	}
-	if cfg.Proxy.RateLimit.DownloadKbps > 0 {
-		limit := rate.Limit(cfg.Proxy.RateLimit.DownloadKbps * 1024)
-		//proxy.downloadLimiter = rate.NewLimiter(limit, int(limit)*2)
-		proxy.downloadLimiter = rate.NewLimiter(limit, int(limit))
-		com.Log.Infof("Global Download rate limit enabled: %d KB/s", cfg.Proxy.RateLimit.DownloadKbps)
-	}
+	// 启动流量统计。
+	go p.traffic.Start()
 
-	go proxy.startTrafficMonitor()
-
-	return proxy
+	return p
 }
 
-func (proxy *Proxy) startTrafficMonitor() {
-	ticker := time.NewTicker(1 * time.Second)
-	for range ticker.C {
-		// 取出并重置当前秒的字节数
-		upBytes := atomic.SwapInt64(&proxy.currentSecUploadBytes, 0)
-		downBytes := atomic.SwapInt64(&proxy.currentSecDownloadBytes, 0)
-
-		// 如果这一秒有流量，或者你想每秒都打印，可以放开条件
-		if upBytes > 0 || downBytes > 0 {
-			upKB := float64(upBytes) / 1024.0
-			downKB := float64(downBytes) / 1024.0
-			com.Log.Infof("[Traffic Stat] Port: %s | Upload: %.2f KB/s | Download: %.2f KB/s",
-				proxy.config.Listen, upKB, downKB)
-		}
-	}
-}
-
-
-func (proxy *Proxy) Run() {
-	server, err := net.Listen("tcp", proxy.config.Listen)
+func (p *Proxy) Run() {
+	server, err := net.Listen("tcp", p.config.Listen)
 	if err != nil {
-		com.Log.Fatalf(err.Error())
+		com.Log.Errorf("listen %s failed: %v", p.config.Listen, err)
+		return
 	}
-	com.Log.Infof("start to listen %s", proxy.config.Listen)
+	defer server.Close()
+
+	com.Log.Infof("start to listen %s", p.config.Listen)
+
+	// 提前解析上游地址，避免每次接受连接都重复解析。
+	upstreamAddr, err := net.ResolveTCPAddr("tcp4", p.config.Upstream.Url)
+	if err != nil {
+		com.Log.Errorf("resolve upstream %s failed: %v",
+			p.config.Upstream.Url, err)
+		return
+	}
 
 	for {
-		s_conn, err := server.Accept()
+		inboundConn, err := server.Accept()
 		if err != nil {
-			com.Log.Errorf("log failed: %s\n", err.Error())
+			com.Log.Errorf("accept failed: %v", err)
 			continue
 		}
-		com.Log.Infof("login IP %s success\n", s_conn.RemoteAddr())
 
-		wrappedClientConn := &RateLimitedConn{
-			Conn:  s_conn,
-			proxy: proxy,
-		}
+		com.Log.Infof("client %s connected", inboundConn.RemoteAddr())
 
-		d_tcpAddr, _ := net.ResolveTCPAddr("tcp4", proxy.config.Upstream.Url)
-		d_conn, err := net.DialTCP("tcp", nil, d_tcpAddr)
+		rateLimitedConn := NewRateLimitedConn(
+			inboundConn,
+			p.rateLimit,
+		)
+
+		wrappedInboundConn := NewTrafficConn(
+			rateLimitedConn,
+			p.traffic,
+		)
+
+		// 建立上游连接。
+		outboundConn, err := net.DialTCP("tcp", nil, upstreamAddr)
 		if err != nil {
-			com.Log.Errorf("log failed: %s\n", err.Error())
-			s_conn.Close()
+			com.Log.Errorf("dial upstream %s failed: %v",
+				p.config.Upstream.Url, err)
+			_ = wrappedInboundConn.Close()
 			continue
 		}
-		go func() {
-			err := proxy.handleTCPClient(wrappedClientConn, d_conn)
+
+		go func(inbound, outbound net.Conn) {
+			err := p.handleTCPClient(inbound, outbound)
 			if err != nil {
-				com.Log.Errorf("handle err: %s\n", err.Error())
+				com.Log.Errorf("handle client failed: %v", err)
 			}
-		}()
+		}(wrappedInboundConn, outboundConn)
 	}
-
 }
 
-func (proxy *Proxy) handleTCPClient(srcConn , dstConn net.Conn) error {
+
+func closeWrite(conn net.Conn) {
+	if conn, ok := conn.(interface {
+		CloseWrite() error
+	}); ok {
+		_ = conn.CloseWrite()
+		return
+	}
+
+	_ = conn.Close()
+}
+
+func (proxy *Proxy) handleTCPClient(inboundConn net.Conn, outboundConn net.Conn) error {
 	var wait sync.WaitGroup
 	wait.Add(2)
-	go proxy.handleUpstream(srcConn, dstConn, &wait)
-	go proxy.handleDownstream(srcConn, dstConn, &wait)
+
+	errCh := make(chan error, 2)
+
+	go func() {
+		defer wait.Done()
+
+		// 下游 -> 上游
+		err := proxy.handleUpstream(
+			inboundConn,
+			outboundConn,
+		)
+
+		errCh <- err
+
+		if err != nil {
+			// 异常时关闭两端，唤醒另一个方向。
+			_ = inboundConn.Close()
+			_ = outboundConn.Close()
+			return;
+		}
+		// 正常 EOF，只关闭上游写方向。
+		closeWrite(outboundConn)
+	}()
+
+	go func() {
+		defer wait.Done()
+
+		// 上游 -> 下游
+		err := proxy.handleDownstream(
+			outboundConn,
+			inboundConn,
+		)
+
+		errCh <- err
+
+		if err != nil {
+			_ = inboundConn.Close()
+			_ = outboundConn.Close()
+			return;
+		} 
+		closeWrite(inboundConn)
+	}()
+
 	wait.Wait()
-	com.Log.Infof("IP %s login exit",srcConn.RemoteAddr())
-	return nil
-}
+	close(errCh)
 
-func (proxy *Proxy) handleUpstream(srcConn , dstConn net.Conn, wait *sync.WaitGroup) error {
-	defer srcConn.Close()
-	defer dstConn.Close()
-	defer wait.Done()
-	key := []byte(proxy.config.Upstream.Key)
+	var firstErr error
 
-	if proxy.config.Upstream.Encrypt {
-		srcReader := bufio.NewReader(srcConn)
-		for {
-			readString, err := srcReader.ReadString('\n')
-			if err != nil {
-				return err
-			}
-			readString = readString[:len(readString)-1]
-			encryptMsg, _ := encrypt(key, readString)
-
-			dstConn.Write([]byte(encryptMsg))
-			dstConn.Write([]byte("\n"))
-
+	for err := range errCh {
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
-
-	} else if proxy.config.Upstream.Decrypt{
-		srcReader := bufio.NewReader(srcConn)
-		for {
-			readString, err := srcReader.ReadString('\n')
-			if err != nil {
-				return err
-			}
-			readString = readString[:len(readString)-1]
-			msg, _ := Decrypt(key, readString)
-			dstConn.Write([]byte(msg))
-			dstConn.Write([]byte("\n"))
-
-		}
-	} else {
-		io.Copy(dstConn, srcConn)
-	}
-	return nil
-}
-
-func (proxy *Proxy) handleDownstream(srcConn , dstConn net.Conn, wait *sync.WaitGroup) error {
-	defer srcConn.Close()
-	defer dstConn.Close()
-	defer wait.Done()
-
-	key := []byte(proxy.config.Key)
-
-
-	if proxy.config.Encrypt {
-		dstReader := bufio.NewReader(dstConn)
-		for {
-			readBytes, err := dstReader.ReadBytes('\n')
-			//fmt.Println(readBytes)
-			readString := string(readBytes)
-			//readString, err := dstReader.ReadString('\n')
-			if err != nil {
-				return err
-			}
-			//log.Printf("\nslen: %d\n", len(readString))
-			readString = readString[:len(readString)-1]
-			//fmt.Print("downstream %s", readString)
-			//result, err := remoteReader.ReadString('\n')
-			encryptMsg, _ := encrypt(key, readString)
-			//readString = encryptMsg + "\n"
-			srcConn.Write([]byte(encryptMsg))
-			srcConn.Write([]byte("\n"))
-
-		}
-
-	} else if proxy.config.Decrypt {
-		//log.Printf("start Decrypt DownStream")
-		dstReader := bufio.NewReader(dstConn)
-		for {
-			readString, err := dstReader.ReadString('\n')
-			if err != nil {
-				//log.Printf(err.Error())
-				return err
-			}
-			//log.Printf("%s\n", readString)
-			//log.Printf("\nslen: %d\n", len(readString))
-			readString = readString[:len(readString)-1]
-
-			//result, err := remoteReader.ReadString('\n')
-			msg, _ := Decrypt(key, readString)
-			//fmt.Printf("downstream decrypt: %v|",msg)
-			//fmt.Print(msg)
-			//readString = msg + "\n"
-			srcConn.Write([]byte(msg))
-			srcConn.Write([]byte("\n"))
-
-		}
-	} else {
-		io.Copy(srcConn, dstConn)
 	}
 
-	return nil
+	_ = inboundConn.Close()
+	_ = outboundConn.Close()
+	com.Log.Infof("IP %s login exit", inboundConn.RemoteAddr())
+	return firstErr
+}
+
+func (proxy *Proxy) handleUpstream(srcConn net.Conn, dstConn net.Conn) error {
+	// 下游接收数据时使用下游 Codec 解码。
+	decoder, err := NewCodec(
+		proxy.config.CryptoEnabled,
+		proxy.config.Key,
+	)
+	if err != nil {
+		return err
+	}
+
+	// 向上游发送数据时使用上游 Codec 编码。
+	encoder, err := NewCodec(proxy.config.Upstream.CryptoEnabled, proxy.config.Upstream.Key)
+	if err != nil {
+		return err
+	}
+
+	_, err = copyBuffer(dstConn, srcConn, nil, decoder, encoder)
+	return err
+}
+
+func (proxy *Proxy) handleDownstream(srcConn net.Conn, dstConn net.Conn) error {
+	// 上游接收数据时使用上游 Codec 解码。
+	decoder, err := NewCodec(
+		proxy.config.Upstream.CryptoEnabled,
+		proxy.config.Upstream.Key,
+	)
+	if err != nil {
+		return err
+	}
+
+	// 向下游发送数据时使用下游 Codec 编码。
+	encoder, err := NewCodec(proxy.config.CryptoEnabled, proxy.config.Key)
+	if err != nil {
+		return err
+	}
+
+	_, err = copyBuffer(dstConn, srcConn, nil, decoder, encoder)
+	return err
 }
