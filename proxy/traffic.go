@@ -4,13 +4,11 @@ import (
     "time"
 	"net"
 	"sync/atomic"
-
     com "wangjui.com/enproxy/common"
 )
 
 type Traffic struct {
 	listen string
-
 	currentSecUploadBytes   int64
 	currentSecDownloadBytes int64
 }
@@ -38,10 +36,7 @@ func (c *TrafficConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 
 	if n > 0 {
-		atomic.AddInt64(
-			&c.traffic.currentSecUploadBytes,
-			int64(n),
-		)
+		atomic.AddInt64(&c.traffic.currentSecUploadBytes, int64(n))
 	}
 
 	return n, err
@@ -51,10 +46,7 @@ func (c *TrafficConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 
 	if n > 0 {
-		atomic.AddInt64(
-			&c.traffic.currentSecDownloadBytes,
-			int64(n),
-		)
+		atomic.AddInt64(&c.traffic.currentSecDownloadBytes, int64(n))
 	}
 
 	return n, err
@@ -65,16 +57,8 @@ func (t *Traffic) Start() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		upBytes := atomic.SwapInt64(
-			&t.currentSecUploadBytes,
-			0,
-		)
-
-		downBytes := atomic.SwapInt64(
-			&t.currentSecDownloadBytes,
-			0,
-		)
-
+		upBytes := atomic.SwapInt64(&t.currentSecUploadBytes, 0)
+		downBytes := atomic.SwapInt64(&t.currentSecDownloadBytes, 0)
 		if upBytes > 0 || downBytes > 0 {
 			com.Log.Infof(
 				"[Traffic Stat] Port: %s | Upload: %.2f KB/s | Download: %.2f KB/s",

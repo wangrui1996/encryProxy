@@ -3,11 +3,7 @@ package proxy
 import (
 	"context"
 	"net"
-
-	//"time"
-
 	"golang.org/x/time/rate"
-	//com "wangjui.com/enproxy/common"
 )
 
 type RateLimitConfig struct {
@@ -85,31 +81,6 @@ func (c *RateLimitedConn) Read(b []byte) (int, error) {
 
 	return n, err
 }
-
-// func (c *RateLimitedConn) Read(b []byte) (int, error) {
-//     n, err := c.Conn.Read(b)
-
-//     if n > 0 && c.limit != nil {
-//         start := time.Now()
-
-//         waitErr := waitN(c.limit.uploadLimiter, n)
-
-//         elapsed := time.Since(start)
-
-//         com.Log.Infof(
-//             "[RateLimit Debug] Upload: bytes=%d wait=%v limiter=%v",
-//             n,
-//             elapsed,
-//             c.limit.uploadLimiter != nil,
-//         )
-
-//         if waitErr != nil {
-//             return n, waitErr
-//         }
-//     }
-
-//     return n, err
-// }
 
 // 代理 -> 下游：下行限速。
 func (c *RateLimitedConn) Write(b []byte) (int, error) {

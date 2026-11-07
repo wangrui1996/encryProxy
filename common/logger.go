@@ -50,5 +50,5 @@ func InitLogger(filePath string, levelStr string) {
 
 	Log.SetOutput(io.MultiWriter(writers...))
 
-	fmt.Sprintf("日志初始化成功 | 级别: [%s] | 输出位置: [%s]", level.String(), outputStatus)
+	fmt.Printf("日志初始化成功 | 级别: [%s] | 输出位置: [%s]", level.String(), outputStatus)
 }
