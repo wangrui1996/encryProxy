@@ -2,46 +2,50 @@ package main
 
 import (
 	"encoding/json"
-	"portForward/proxy"
-	"log"
+	"wangjui.com/enproxy/proxy"
 	"os"
 	"path/filepath"
+	com "wangjui.com/enproxy/common"
 )
 
 var cfg proxy.Config
 
 func readConfig(cfg *proxy.Config)  {
+	com.InitLogger("enproxy", "debug")
 	configFileName := "config.json"
 	if len(os.Args) > 1 {
 		configFileName = os.Args[1]
 	}
 	configFileName, _ = filepath.Abs(configFileName)
-	log.Printf("Loading config: %v", configFileName)
+	com.Log.Infof("Loading config: %v", configFileName)
 
 	configFile, err := os.Open(configFileName)
 	if err != nil {
-		log.Fatal("File error: ", err.Error())
+		com.Log.Fatalf("File error: ", err.Error())
 	}
-	//byteValue, _ := ioutil.ReadAll(configFile)
-	//fmt.Println(string(byteValue))
 	defer configFile.Close()
 
-
-	//if err := json.Unmarshal(byteValue, &cfg); err != nil {
-	//		log.Fatal("Config error: ", err.Error())
-	//	}
 	jsonParser := json.NewDecoder(configFile)
-	//fmt.Println(jsonParser.Buffered())
-	//os.Exit(0)
+
 	if err := jsonParser.Decode(&cfg); err != nil {
-		log.Fatal("Config error: ", err.Error())
+		com.Log.Fatalf("Config error: ", err.Error())
 	}
 }
 
 func main() {
 	readConfig(&cfg)
-	//fmt.Printf("%v\n", cfg)
-	proxy := proxy.NewProxy(&cfg)
-	proxy.Run()
+
+	// 创建流量统计管理器
+	trafficManager := proxy.NewTrafficManager()
+	go trafficManager.Start()
+
+	// 创建代理实例，共享流量统计管理器
+	p := proxy.NewProxy(&cfg, trafficManager)
+	go p.Run()
+	
+	webServer := proxy.NewWebServer(cfg.Web.Listen, trafficManager)
+	go webServer.Run()
+
+	select {} // 阻塞主线程，防止退出
 }
 
