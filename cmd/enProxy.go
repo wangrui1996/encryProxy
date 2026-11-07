@@ -39,12 +39,19 @@ func main() {
 	trafficManager := proxy.NewTrafficManager()
 	go trafficManager.Start()
 
-	// 创建代理实例，共享流量统计管理器
-	p := proxy.NewProxy(&cfg, trafficManager)
-	go p.Run()
-	
-	webServer := proxy.NewWebServer(cfg.Web.Listen, trafficManager)
-	go webServer.Run()
+	// 创建多个代理。
+	proxyManager, err := proxy.NewProxyManager(cfg.Proxy, trafficManager)
+	if err != nil {
+		com.Log.Fatalf("create proxy manager failed: %v", err)
+	}
+
+	proxyManager.Start()
+	com.Log.Infof("started %d proxy instances", proxyManager.Count())
+
+	if cfg.Web.Enabled {
+		webServer := proxy.NewWebServer(cfg.Web.Listen, trafficManager)
+		go webServer.Run()
+	}
 
 	select {} // 阻塞主线程，防止退出
 }

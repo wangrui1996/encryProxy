@@ -12,12 +12,39 @@ type Proxy struct {
 	traffic *Traffic // 流量统计模块
 }
 
-func NewProxy(cfg *Config, trafficManager *TrafficManager) *Proxy {
+func NewProxy(cfg ProxyConfig, trafficManager *TrafficManager) *Proxy {
 	return &Proxy{
-		config:    cfg.Proxy,
-		rateLimit: NewRateLimit(cfg.Proxy.RateLimit),
-		traffic:   trafficManager.Register(cfg.Proxy.Listen),
+		config:    cfg,
+		rateLimit: NewRateLimit(cfg.RateLimit),
+		traffic:   trafficManager.Register(cfg.Listen),
 	}
+}
+
+func (p *Proxy) handleConnection(inboundConn net.Conn, reqUrl string) {
+	upstreamAddr, err := net.ResolveTCPAddr("tcp4", reqUrl)
+	if err != nil {
+		com.Log.Errorf("resolve upstream %s failed: %v", p.config.Upstream.Url, err)
+		return
+	}
+
+	rateLimitedConn := NewRateLimitedConn(inboundConn, p.rateLimit)
+	wrappedInboundConn := NewTrafficConn(rateLimitedConn, p.traffic)
+
+	// 建立上游连接。
+	outboundConn, err := net.DialTCP("tcp", nil, upstreamAddr)
+	if err != nil {
+		com.Log.Errorf("dial upstream %s failed: %v",
+			p.config.Upstream.Url, err)
+		_ = wrappedInboundConn.Close()
+		return
+	}
+
+	func(inbound, outbound net.Conn) {
+		err := p.handleTCPClient(inbound, outbound)
+		if err != nil {
+			com.Log.Errorf("handle client failed: %v", err)
+		}
+	}(wrappedInboundConn, outboundConn)
 }
 
 func (p *Proxy) Run() {
@@ -30,14 +57,6 @@ func (p *Proxy) Run() {
 
 	com.Log.Infof("start to listen %s", p.config.Listen)
 
-	// 提前解析上游地址，避免每次接受连接都重复解析。
-	upstreamAddr, err := net.ResolveTCPAddr("tcp4", p.config.Upstream.Url)
-	if err != nil {
-		com.Log.Errorf("resolve upstream %s failed: %v",
-			p.config.Upstream.Url, err)
-		return
-	}
-
 	for {
 		inboundConn, err := server.Accept()
 		if err != nil {
@@ -46,32 +65,7 @@ func (p *Proxy) Run() {
 		}
 
 		com.Log.Infof("client %s connected", inboundConn.RemoteAddr())
-
-		rateLimitedConn := NewRateLimitedConn(
-			inboundConn,
-			p.rateLimit,
-		)
-
-		wrappedInboundConn := NewTrafficConn(
-			rateLimitedConn,
-			p.traffic,
-		)
-
-		// 建立上游连接。
-		outboundConn, err := net.DialTCP("tcp", nil, upstreamAddr)
-		if err != nil {
-			com.Log.Errorf("dial upstream %s failed: %v",
-				p.config.Upstream.Url, err)
-			_ = wrappedInboundConn.Close()
-			continue
-		}
-
-		go func(inbound, outbound net.Conn) {
-			err := p.handleTCPClient(inbound, outbound)
-			if err != nil {
-				com.Log.Errorf("handle client failed: %v", err)
-			}
-		}(wrappedInboundConn, outboundConn)
+		go p.handleConnection(inboundConn, p.config.Upstream.Url)
 	}
 }
 

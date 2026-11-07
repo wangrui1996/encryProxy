@@ -147,6 +147,18 @@ func (c *TrafficConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
+func (c *TrafficConn) CloseWrite() error {
+    cw, ok := c.Conn.(interface {
+        CloseWrite() error
+    })
+
+    if !ok {
+        return net.ErrClosed
+    }
+
+    return cw.CloseWrite()
+}
+
 // Start 启动每秒流量采样。
 // 在主程序中使用 go trafficManager.Start()。
 func (m *TrafficManager) Start() {

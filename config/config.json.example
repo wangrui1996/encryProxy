@@ -3,12 +3,12 @@
     "enabled": true,
     "listen": "0.0.0.0:19998"
   },
-  "proxy": {
+  "proxy": [{
     "listen": "0.0.0.0:12348",
     "crypto_enabled": false,
     "key": "GIF34US6WlaL4Ayx",
     "rate_limit": {
-      "up_kbps": 1024,
+      "up_kbps": 0,
       "down_kbps": 0
     },
     "upstream": {
@@ -16,7 +16,23 @@
       "url": "10.44.0.10:3022",
       "crypto_enabled": false,
       "key": "GIF34US6WlaL4Ayx"
+      }
+    },
+    {
+    "listen": "0.0.0.0:12344",
+    "crypto_enabled": false,
+    "key": "GIF34US6WlaL4Ayx",
+    "rate_limit": {
+      "up_kbps": 0,
+      "down_kbps": 0
+    },
+    "upstream": {
+      "name": "",
+      "url": "10.44.0.10:3022",
+      "crypto_enabled": false,
+      "key": "GIF34US6WlaL4Ayx"
+      }
     }
-  }
+  ]
 
 }
