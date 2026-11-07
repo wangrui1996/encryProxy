@@ -6,11 +6,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-type RateLimitConfig struct {
-	UploadKbps   int `json:"up_kbps"`   // 上行限速 KB/s
-	DownloadKbps int `json:"down_kbps"` // 下行限速 KB/s
-}
-
 type RateLimit struct {
 	uploadLimiter   *rate.Limiter
 	downloadLimiter *rate.Limiter

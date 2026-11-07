@@ -6,42 +6,18 @@ import (
 	com "wangjui.com/enproxy/common"
 )
 
-type Config struct {
-	Proxy ProxyConfig `json:"proxy"`
-}
-
-type ProxyConfig struct {
-	Listen string `json:"listen"`
-	CryptoEnabled bool `json:"crypto_enabled"`
-	Key string `json:"key"`
-	RateLimit      RateLimitConfig `json:"rate_limit"`
-	Upstream UpstreamConfig `json:"upstream"`
-}
-
-type UpstreamConfig struct {
-	Name string `json:"name"`
-	Url string `json:"url"`
-	CryptoEnabled bool `json:"crypto_enabled"`
-	Key string `json:"key"`
-}
-
 type Proxy struct {
 	config ProxyConfig
 	rateLimit *RateLimit // 限速模块
 	traffic *Traffic // 流量统计模块
 }
 
-func NewProxy(cfg *Config) *Proxy {
-	p := &Proxy{
+func NewProxy(cfg *Config, trafficManager *TrafficManager) *Proxy {
+	return &Proxy{
 		config:    cfg.Proxy,
 		rateLimit: NewRateLimit(cfg.Proxy.RateLimit),
-		traffic:   NewTraffic(cfg.Proxy.Listen),
+		traffic:   trafficManager.Register(cfg.Proxy.Listen),
 	}
-
-	// 启动流量统计。
-	go p.traffic.Start()
-
-	return p
 }
 
 func (p *Proxy) Run() {

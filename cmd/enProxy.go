@@ -34,7 +34,18 @@ func readConfig(cfg *proxy.Config)  {
 
 func main() {
 	readConfig(&cfg)
-	proxy := proxy.NewProxy(&cfg)
-	proxy.Run()
+
+	// 创建流量统计管理器
+	trafficManager := proxy.NewTrafficManager()
+	go trafficManager.Start()
+
+	// 创建代理实例，共享流量统计管理器
+	p := proxy.NewProxy(&cfg, trafficManager)
+	go p.Run()
+	
+	webServer := proxy.NewWebServer(cfg.Web.Listen, trafficManager)
+	go webServer.Run()
+
+	select {} // 阻塞主线程，防止退出
 }
 
