@@ -5,12 +5,13 @@ import (
 	"net"
 )
 
-// ProxyManager 管理所有 Inbound、账号、路由和 Web Dashboard。
 type ProxyManager struct {
 	proxies        []*Proxy
 	trafficManager *TrafficManager
 	webConfig      WebConfig
 	webServer      *WebServer
+	inbounds       []InboundConfig
+	accounts       []AccountConfig
 }
 
 func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager, error) {
@@ -23,7 +24,6 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
 	if len(cfg.Outbounds) == 0 {
 		return nil, fmt.Errorf("no outbound configured")
 	}
-
 	inboundTags := make(map[string]struct{}, len(cfg.Inbounds))
 	listenSet := make(map[string]struct{}, len(cfg.Inbounds))
 	for i := range cfg.Inbounds {
@@ -35,7 +35,6 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
 			return nil, fmt.Errorf("duplicate inbound tag: %s", inbound.Tag)
 		}
 		inboundTags[inbound.Tag] = struct{}{}
-
 		if inbound.Listen == "" {
 			return nil, fmt.Errorf("inbound %q listen address is empty", inbound.Tag)
 		}
@@ -46,14 +45,12 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
 			return nil, fmt.Errorf("inbound %q invalid listen address: %w", inbound.Tag, err)
 		}
 		listenSet[inbound.Listen] = struct{}{}
-
 		if inbound.Crypto.Enabled {
 			if err := validateAESKey(inbound.Crypto.Key); err != nil {
 				return nil, fmt.Errorf("inbound %q crypto: %w", inbound.Tag, err)
 			}
 		}
 	}
-
 	outboundTags := make(map[string]struct{}, len(cfg.Outbounds))
 	for i := range cfg.Outbounds {
 		outbound := &cfg.Outbounds[i]
@@ -64,7 +61,6 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
 			return nil, fmt.Errorf("duplicate outbound tag: %s", outbound.Tag)
 		}
 		outboundTags[outbound.Tag] = struct{}{}
-
 		if outbound.Protocol == "" {
 			outbound.Protocol = "tcp"
 		}
@@ -83,7 +79,6 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
 			}
 		}
 	}
-
 	accounts, err := NewAccountManager(cfg.Accounts)
 	if err != nil {
 		return nil, err
@@ -93,21 +88,14 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
 			return nil, fmt.Errorf("inbound %q requires authentication but no accounts are configured", inbound.Tag)
 		}
 	}
-
 	routes, err := NewRouteManager(cfg.Route, cfg.Inbounds, cfg.Outbounds)
 	if err != nil {
 		return nil, err
 	}
-
-	manager := &ProxyManager{
-		proxies:        make([]*Proxy, 0, len(cfg.Inbounds)),
-		trafficManager: trafficManager,
-		webConfig:      cfg.Web,
+	manager := &ProxyManager{proxies: make([]*Proxy, 0, len(cfg.Inbounds)), trafficManager: trafficManager, webConfig: cfg.Web, inbounds: append([]InboundConfig(nil), cfg.Inbounds...), accounts: append([]AccountConfig(nil), cfg.Accounts...)}
+	for _, in := range cfg.Inbounds {
+		manager.proxies = append(manager.proxies, NewProxy(in, accounts, routes, trafficManager))
 	}
-	for _, inbound := range cfg.Inbounds {
-		manager.proxies = append(manager.proxies, NewProxy(inbound, accounts, routes, trafficManager))
-	}
-
 	if cfg.Web.Enabled && cfg.Web.Listen == "" {
 		return nil, fmt.Errorf("web.listen is empty while web.enabled is true")
 	}
@@ -123,19 +111,14 @@ func validateAESKey(key string) error {
 	}
 }
 
-// Start 启动所有入口监听和可选 Web Dashboard。
 func (m *ProxyManager) Start() {
-	for _, proxy := range m.proxies {
-		p := proxy
-		go p.Run()
+	for _, p := range m.proxies {
+		proxy := p
+		go proxy.Run()
 	}
-
 	if m.webConfig.Enabled {
-		m.webServer = NewWebServer(m.webConfig.Listen, m.trafficManager)
+		m.webServer = NewWebServer(m.webConfig.Listen, m.trafficManager, m.inbounds, m.accounts)
 		go m.webServer.Run()
 	}
 }
-
-func (m *ProxyManager) Count() int {
-	return len(m.proxies)
-}
+func (m *ProxyManager) Count() int { return len(m.proxies) }
