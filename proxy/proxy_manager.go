@@ -14,71 +14,107 @@ type ProxyManager struct {
     accounts       []AccountConfig
 }
 
-func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager, error) {
-    if trafficManager == nil {
-        return nil, fmt.Errorf("traffic manager is nil")
+// 校验密码是否合理
+func ValidateAESKey(key string) error {
+    switch len([]byte(key)) {
+    case 16, 24, 32:
+        return nil
+    default:
+        return fmt.Errorf("AES key must be 16, 24, or 32 bytes; got %d", len([]byte(key)))
     }
-    if len(cfg.Inbounds) == 0 {
-        return nil, fmt.Errorf("no inbound configured")
+}
+
+// 校验监听地址
+func ValidateListenAddr(tag, listen string, seen map[string]struct{}) error {
+    if listen == "" {
+        return fmt.Errorf("inbound %q listen address is empty", tag)
     }
-    if len(cfg.Outbounds) == 0 {
-        return nil, fmt.Errorf("no outbound configured")
+    if _, exists := seen[listen]; exists {
+        return fmt.Errorf("duplicate inbound listen address: %s", listen)
     }
-    inboundTags := make(map[string]struct{}, len(cfg.Inbounds))
-    listenSet := make(map[string]struct{}, len(cfg.Inbounds))
-    for i := range cfg.Inbounds {
-        inbound := &cfg.Inbounds[i]
+    if _, err := net.ResolveTCPAddr("tcp", listen); err != nil {
+        return fmt.Errorf("inbound %q invalid listen address: %w", tag, err)
+    }
+    seen[listen] = struct{}{}
+    return nil
+}
+
+// 验证 inbounds 配置文件
+func ValidateInbounds(inbounds []InboundConfig) error {
+    if len(inbounds) == 0 {
+        return fmt.Errorf("no inbound configured")
+    }
+    inboundTags := make(map[string]struct{}, len(inbounds))
+    listenSet := make(map[string]struct{}, len(inbounds))
+    for i := range inbounds {
+        inbound := &inbounds[i]
         if inbound.Tag == "" {
-            return nil, fmt.Errorf("inbound tag is empty")
+            return fmt.Errorf("inbound tag is empty")
         }
         if _, exists := inboundTags[inbound.Tag]; exists {
-            return nil, fmt.Errorf("duplicate inbound tag: %s", inbound.Tag)
+            return fmt.Errorf("duplicate inbound tag: %s", inbound.Tag)
         }
         inboundTags[inbound.Tag] = struct{}{}
-        if inbound.Listen == "" {
-            return nil, fmt.Errorf("inbound %q listen address is empty", inbound.Tag)
+        if err := ValidateListenAddr(inbound.Tag, inbound.Listen, listenSet); err != nil {
+            return err
         }
-        if _, exists := listenSet[inbound.Listen]; exists {
-            return nil, fmt.Errorf("duplicate inbound listen address: %s", inbound.Listen)
-        }
-        if _, err := net.ResolveTCPAddr("tcp", inbound.Listen); err != nil {
-            return nil, fmt.Errorf("inbound %q invalid listen address: %w", inbound.Tag, err)
-        }
-        listenSet[inbound.Listen] = struct{}{}
         if inbound.Crypto.Enabled {
-            if err := validateAESKey(inbound.Crypto.Key); err != nil {
-                return nil, fmt.Errorf("inbound %q crypto: %w", inbound.Tag, err)
+            if err := ValidateAESKey(inbound.Crypto.Key); err != nil {
+                return fmt.Errorf("inbound %q crypto: %w", inbound.Tag, err)
             }
         }
     }
-    outboundTags := make(map[string]struct{}, len(cfg.Outbounds))
-    for i := range cfg.Outbounds {
-        outbound := &cfg.Outbounds[i]
+    return nil
+}
+
+// 验证 Outbound 配置文件
+func ValidateOutbounds(outbounds []OutboundConfig) error {
+    if len(outbounds) == 0 {
+        return fmt.Errorf("no outbound configured")
+    }
+    outboundTags := make(map[string]struct{}, len(outbounds))
+    for i := range outbounds {
+        outbound := &outbounds[i]
         if outbound.Tag == "" {
-            return nil, fmt.Errorf("outbound tag is empty")
+            return fmt.Errorf("outbound tag is empty")
         }
         if _, exists := outboundTags[outbound.Tag]; exists {
-            return nil, fmt.Errorf("duplicate outbound tag: %s", outbound.Tag)
+            return fmt.Errorf("duplicate outbound tag: %s", outbound.Tag)
         }
         outboundTags[outbound.Tag] = struct{}{}
         if outbound.Protocol == "" {
             outbound.Protocol = "tcp"
         }
         if outbound.Protocol != "tcp" {
-            return nil, fmt.Errorf("outbound %q unsupported protocol %q", outbound.Tag, outbound.Protocol)
+            return fmt.Errorf("outbound %q unsupported protocol %q", outbound.Tag, outbound.Protocol)
         }
         if outbound.Server == "" {
-            return nil, fmt.Errorf("outbound %q server address is empty", outbound.Tag)
+            return fmt.Errorf("outbound %q server address is empty", outbound.Tag)
         }
         if _, err := net.ResolveTCPAddr("tcp", outbound.Server); err != nil {
-            return nil, fmt.Errorf("outbound %q invalid server address: %w", outbound.Tag, err)
+            return fmt.Errorf("outbound %q invalid server address: %w", outbound.Tag, err)
         }
         if outbound.Crypto.Enabled {
-            if err := validateAESKey(outbound.Crypto.Key); err != nil {
-                return nil, fmt.Errorf("outbound %q crypto: %w", outbound.Tag, err)
+            if err := ValidateAESKey(outbound.Crypto.Key); err != nil {
+                return fmt.Errorf("outbound %q crypto: %w", outbound.Tag, err)
             }
         }
     }
+    return nil;
+}
+
+// 代理总管理程序
+func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager, error) {
+    if trafficManager == nil {
+        return nil, fmt.Errorf("traffic manager is nil")
+    }
+    if err := ValidateInbounds(cfg.Inbounds); err != nil {
+        return nil, err
+    }
+    if err := ValidateOutbounds(cfg.Outbounds); err != nil {
+        return nil, err
+    }
+
     accounts, err := NewAccountManager(cfg.Accounts)
     if err != nil {
         return nil, err
@@ -102,23 +138,14 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
     return manager, nil
 }
 
-func validateAESKey(key string) error {
-    switch len([]byte(key)) {
-    case 16, 24, 32:
-        return nil
-    default:
-        return fmt.Errorf("AES key must be 16, 24, or 32 bytes; got %d", len([]byte(key)))
-    }
-}
-
-func (m *ProxyManager) Start() {
-    for _, p := range m.proxies {
+func (manager *ProxyManager) Start() {
+    for _, p := range manager.proxies {
         proxy := p
         go proxy.Run()
     }
-    if m.webConfig.Enabled {
-        m.webServer = NewWebServer(m.webConfig.Listen, m.trafficManager, m.inbounds, m.accounts)
-        go m.webServer.Run()
+    if manager.webConfig.Enabled {
+        manager.webServer = NewWebServer(manager.webConfig.Listen, manager.trafficManager, manager.inbounds, manager.accounts)
+        go manager.webServer.Run()
     }
 }
-func (m *ProxyManager) Count() int { return len(m.proxies) }
+func (manager *ProxyManager) Count() int { return len(manager.proxies) }

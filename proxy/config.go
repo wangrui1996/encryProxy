@@ -2,8 +2,8 @@ package proxy
 
 // Config 是 enproxy 的完整运行配置。
 type Config struct {
-    Web       WebConfig        `json:"web"`
     Inbounds  []InboundConfig  `json:"inbounds"`
+    Web       WebConfig        `json:"web"`
     Outbounds []OutboundConfig `json:"outbounds"`
     Accounts  []AccountConfig  `json:"accounts"`
     Route     RouteConfig      `json:"route"`
@@ -25,8 +25,6 @@ type OutboundConfig struct {
     Account  *OutboundAccountConfig `json:"account,omitempty"`
 }
 
-// OutboundAccountConfig 保存登录上游所需的凭据。
-// 注意：protocol=tcp 只是普通 TCP；当前代码不会自动发送这些凭据。
 // 只有在定义并实现具体上游认证协议后，才能真正使用该字段登录上游。
 type OutboundAccountConfig struct {
     Username string `json:"username"`
