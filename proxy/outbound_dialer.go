@@ -25,11 +25,7 @@ func NewOutboundDialer(dns *DNSResolver) *OutboundDialer {
     }
 }
 
-func (d *OutboundDialer) DialContext(
-    ctx context.Context,
-    address string,
-) (net.Conn, error) {
-
+func (d *OutboundDialer) DialContext(ctx context.Context, address string) (net.Conn, error) {
     if d == nil || d.dns == nil {
         return nil, fmt.Errorf("outbound dialer is not initialized")
     }
@@ -40,11 +36,7 @@ func (d *OutboundDialer) DialContext(
 
     host, port, err := net.SplitHostPort(address)
     if err != nil {
-        return nil, fmt.Errorf(
-            "invalid outbound address %q: %w",
-            address,
-            err,
-        )
+        return nil, fmt.Errorf("invalid outbound address %q: %w", address, err)
     }
 
     // IP 地址直接连接。
@@ -61,7 +53,6 @@ func (d *OutboundDialer) DialContext(
     // 连接整体超时。
     dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
     defer cancel()
-
     // 多 IP 轮询。
     start := int(d.nextIP.Add(1)-1) % len(ips)
 
@@ -71,29 +62,15 @@ func (d *OutboundDialer) DialContext(
         ip := ips[(start+i)%len(ips)]
 
         target := net.JoinHostPort(ip.String(), port)
-
-        attemptCtx, attemptCancel := context.WithTimeout(
-            dialCtx,
-            3*time.Second,
-        )
-
-        conn, dialErr := d.dialer.DialContext(
-            attemptCtx,
-            "tcp",
-            target,
-        )
-
+        attemptCtx, attemptCancel := context.WithTimeout(dialCtx, 3*time.Second)
+        conn, dialErr := d.dialer.DialContext(attemptCtx, "tcp", target)
         attemptCancel()
 
         if dialErr == nil {
             return conn, nil
         }
 
-        lastErr = fmt.Errorf(
-            "connect %s failed: %w",
-            target,
-            dialErr,
-        )
+        lastErr = fmt.Errorf("connect %s failed: %w", target, dialErr)
 
         if dialCtx.Err() != nil {
             break
@@ -104,9 +81,5 @@ func (d *OutboundDialer) DialContext(
         lastErr = fmt.Errorf("no available IP")
     }
 
-    return nil, fmt.Errorf(
-        "outbound %q connection failed: %w",
-        address,
-        lastErr,
-    )
+    return nil, fmt.Errorf("outbound %q connection failed: %w", address, lastErr)
 }

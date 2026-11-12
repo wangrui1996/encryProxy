@@ -73,19 +73,12 @@ func cloneIPAddrs(ips []net.IPAddr) []net.IPAddr {
 }
 
 // Lookup 查询域名对应的 IP。
-func (r *DNSResolver) Lookup(
-    ctx context.Context,
-    host string,
-) ([]net.IPAddr, error) {
-
+func (r *DNSResolver) Lookup(ctx context.Context,host string) ([]net.IPAddr, error) {
     if r == nil {
         return nil, fmt.Errorf("DNS resolver is nil")
     }
 
-    host = strings.TrimSuffix(
-        strings.TrimSpace(host),
-        ".",
-    )
+    host = strings.TrimSuffix(strings.TrimSpace(host), ".")
 
     if host == "" {
         return nil, fmt.Errorf("DNS host is empty")
@@ -140,10 +133,7 @@ func (r *DNSResolver) Lookup(
     r.mu.Unlock()
 
     // DNS 查询有独立的超时时间。
-    lookupCtx, cancel := context.WithTimeout(
-        context.Background(),
-        5*time.Second,
-    )
+    lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
     ips, err := r.lookupDNS(lookupCtx, key)
     cancel()
@@ -168,25 +158,14 @@ func (r *DNSResolver) Lookup(
     return cloneIPAddrs(ips), err
 }
 
-func (r *DNSResolver) lookupDNS(
-    ctx context.Context,
-    host string,
-) ([]net.IPAddr, error) {
-
+func (r *DNSResolver) lookupDNS(ctx context.Context, host string) ([]net.IPAddr, error) {
     ips, err := r.resolver.LookupIPAddr(ctx, host)
     if err != nil {
-        return nil, fmt.Errorf(
-            "resolve domain %q failed: %w",
-            host,
-            err,
-        )
+        return nil, fmt.Errorf("resolve domain %q failed: %w", host, err)
     }
 
     if len(ips) == 0 {
-        return nil, fmt.Errorf(
-            "resolve domain %q returned no IP",
-            host,
-        )
+        return nil, fmt.Errorf("resolve domain %q returned no IP", host)
     }
 
     return ips, nil
