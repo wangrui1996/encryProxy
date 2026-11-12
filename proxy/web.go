@@ -20,6 +20,19 @@ type WebServer struct {
     server   *http.Server
 }
 
+type InboundLimitInfo struct {
+    Tag          string          `json:"tag"`
+    Listen       string          `json:"listen"`
+    AuthRequired bool            `json:"auth_required"`
+    RateLimit    RateLimitConfig `json:"rate_limit"`
+}
+
+type AccountLimitInfo struct {
+    Name      string          `json:"name"`
+    Enabled   bool            `json:"enabled"`
+    RateLimit RateLimitConfig `json:"rate_limit"`
+}
+
 func NewWebServer(addr string, traffic *TrafficManager, inbounds []InboundConfig, accounts []AccountConfig) *WebServer {
     return &WebServer{addr: addr, traffic: traffic, inbounds: inbounds, accounts: accounts}
 }
@@ -80,5 +93,29 @@ func (w *WebServer) handleMonthly(rw http.ResponseWriter, r *http.Request) {
     writeJSON(rw, w.traffic.GetMonthlyHistory())
 }
 func (w *WebServer) handleLimits(rw http.ResponseWriter, r *http.Request) {
-    writeJSON(rw, map[string]interface{}{"inbounds": w.inbounds, "accounts": w.accounts})
+    inbounds := make([]InboundLimitInfo, 0, len(w.inbounds))
+
+    for _, in := range w.inbounds {
+        inbounds = append(inbounds, InboundLimitInfo{
+            Tag:          in.Tag,
+            Listen:       in.Listen,
+            AuthRequired: in.AuthRequired,
+            RateLimit:    in.RateLimit,
+        })
+    }
+
+    accounts := make([]AccountLimitInfo, 0, len(w.accounts))
+
+    for _, account := range w.accounts {
+        accounts = append(accounts, AccountLimitInfo{
+            Name:      account.Name,
+            Enabled:   account.Enabled,
+            RateLimit: account.RateLimit,
+        })
+    }
+
+    writeJSON(rw, map[string]interface{}{
+        "inbounds": inbounds,
+        "accounts": accounts,
+    })
 }
