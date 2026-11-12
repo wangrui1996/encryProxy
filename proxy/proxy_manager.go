@@ -1,95 +1,141 @@
 package proxy
 
 import (
-    "fmt"
-    "net"
+	"fmt"
+	"net"
 )
 
-// ProxyManager 管理多个 TCP 代理。
+// ProxyManager 管理所有 Inbound、账号、路由和 Web Dashboard。
 type ProxyManager struct {
-    proxy []*Proxy
+	proxies        []*Proxy
+	trafficManager *TrafficManager
+	webConfig      WebConfig
+	webServer      *WebServer
 }
 
-// NewProxyManager 创建代理管理器。
-func NewProxyManager(configs []ProxyConfig, trafficManager *TrafficManager) (*ProxyManager, error) {
+func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager, error) {
+	if trafficManager == nil {
+		return nil, fmt.Errorf("traffic manager is nil")
+	}
+	if len(cfg.Inbounds) == 0 {
+		return nil, fmt.Errorf("no inbound configured")
+	}
+	if len(cfg.Outbounds) == 0 {
+		return nil, fmt.Errorf("no outbound configured")
+	}
 
-    if trafficManager == nil {
-        return nil, fmt.Errorf("traffic manager is nil")
-    }
+	inboundTags := make(map[string]struct{}, len(cfg.Inbounds))
+	listenSet := make(map[string]struct{}, len(cfg.Inbounds))
+	for i := range cfg.Inbounds {
+		inbound := &cfg.Inbounds[i]
+		if inbound.Tag == "" {
+			return nil, fmt.Errorf("inbound tag is empty")
+		}
+		if _, exists := inboundTags[inbound.Tag]; exists {
+			return nil, fmt.Errorf("duplicate inbound tag: %s", inbound.Tag)
+		}
+		inboundTags[inbound.Tag] = struct{}{}
 
-    if len(configs) == 0 {
-        return nil, fmt.Errorf("no proxy configured")
-    }
+		if inbound.Listen == "" {
+			return nil, fmt.Errorf("inbound %q listen address is empty", inbound.Tag)
+		}
+		if _, exists := listenSet[inbound.Listen]; exists {
+			return nil, fmt.Errorf("duplicate inbound listen address: %s", inbound.Listen)
+		}
+		if _, err := net.ResolveTCPAddr("tcp", inbound.Listen); err != nil {
+			return nil, fmt.Errorf("inbound %q invalid listen address: %w", inbound.Tag, err)
+		}
+		listenSet[inbound.Listen] = struct{}{}
 
-    manager := &ProxyManager{
-        proxy: make([]*Proxy, 0, len(configs)),
-    }
+		if inbound.Crypto.Enabled {
+			if err := validateAESKey(inbound.Crypto.Key); err != nil {
+				return nil, fmt.Errorf("inbound %q crypto: %w", inbound.Tag, err)
+			}
+		}
+	}
 
-    // 防止多个代理监听同一个地址。
-    listenSet := make(map[string]struct{})
+	outboundTags := make(map[string]struct{}, len(cfg.Outbounds))
+	for i := range cfg.Outbounds {
+		outbound := &cfg.Outbounds[i]
+		if outbound.Tag == "" {
+			return nil, fmt.Errorf("outbound tag is empty")
+		}
+		if _, exists := outboundTags[outbound.Tag]; exists {
+			return nil, fmt.Errorf("duplicate outbound tag: %s", outbound.Tag)
+		}
+		outboundTags[outbound.Tag] = struct{}{}
 
-    for _, cfg := range configs {
+		if outbound.Protocol == "" {
+			outbound.Protocol = "tcp"
+		}
+		if outbound.Protocol != "tcp" {
+			return nil, fmt.Errorf("outbound %q unsupported protocol %q", outbound.Tag, outbound.Protocol)
+		}
+		if outbound.Server == "" {
+			return nil, fmt.Errorf("outbound %q server address is empty", outbound.Tag)
+		}
+		if _, err := net.ResolveTCPAddr("tcp", outbound.Server); err != nil {
+			return nil, fmt.Errorf("outbound %q invalid server address: %w", outbound.Tag, err)
+		}
+		if outbound.Crypto.Enabled {
+			if err := validateAESKey(outbound.Crypto.Key); err != nil {
+				return nil, fmt.Errorf("outbound %q crypto: %w", outbound.Tag, err)
+			}
+		}
+	}
 
-        if cfg.Listen == "" {
-            return nil, fmt.Errorf(
-                "proxy %q listen address is empty",
-                cfg.Name,
-            )
-        }
+	accounts, err := NewAccountManager(cfg.Accounts)
+	if err != nil {
+		return nil, err
+	}
+	for _, inbound := range cfg.Inbounds {
+		if inbound.AuthRequired && accounts.Count() == 0 {
+			return nil, fmt.Errorf("inbound %q requires authentication but no accounts are configured", inbound.Tag)
+		}
+	}
 
-        if cfg.Upstream.Url == "" {
-            return nil, fmt.Errorf(
-                "proxy %q upstream address is empty",
-                cfg.Name,
-            )
-        }
+	routes, err := NewRouteManager(cfg.Route, cfg.Inbounds, cfg.Outbounds)
+	if err != nil {
+		return nil, err
+	}
 
-        if _, exists := listenSet[cfg.Listen]; exists {
-            return nil, fmt.Errorf(
-                "duplicate proxy listen address: %s",
-                cfg.Listen,
-            )
-        }
+	manager := &ProxyManager{
+		proxies:        make([]*Proxy, 0, len(cfg.Inbounds)),
+		trafficManager: trafficManager,
+		webConfig:      cfg.Web,
+	}
+	for _, inbound := range cfg.Inbounds {
+		manager.proxies = append(manager.proxies, NewProxy(inbound, accounts, routes, trafficManager))
+	}
 
-        // 检查监听地址格式。
-        if _, err := net.ResolveTCPAddr("tcp", cfg.Listen); err != nil {
-            return nil, fmt.Errorf(
-                "proxy %q invalid listen address: %w",
-                cfg.Name,
-                err,
-            )
-        }
-
-        // 检查上游地址格式。
-        if _, err := net.ResolveTCPAddr("tcp", cfg.Upstream.Url); err != nil {
-            return nil, fmt.Errorf(
-                "proxy %q invalid upstream address: %w",
-                cfg.Name,
-                err,
-            )
-        }
-
-        listenSet[cfg.Listen] = struct{}{}
-
-        manager.proxy = append(
-            manager.proxy,
-            NewProxy(cfg, trafficManager),
-        )
-    }
-
-    return manager, nil
+	if cfg.Web.Enabled && cfg.Web.Listen == "" {
+		return nil, fmt.Errorf("web.listen is empty while web.enabled is true")
+	}
+	return manager, nil
 }
 
-// Start 启动所有代理。
+func validateAESKey(key string) error {
+	switch len([]byte(key)) {
+	case 16, 24, 32:
+		return nil
+	default:
+		return fmt.Errorf("AES key must be 16, 24, or 32 bytes; got %d", len([]byte(key)))
+	}
+}
+
+// Start 启动所有入口监听和可选 Web Dashboard。
 func (m *ProxyManager) Start() {
-    for _, proxy := range m.proxy {
-        p := proxy
+	for _, proxy := range m.proxies {
+		p := proxy
+		go p.Run()
+	}
 
-        go p.Run()
-    }
+	if m.webConfig.Enabled {
+		m.webServer = NewWebServer(m.webConfig.Listen, m.trafficManager)
+		go m.webServer.Run()
+	}
 }
 
-// Count 获取代理数量。
 func (m *ProxyManager) Count() int {
-    return len(m.proxy)
+	return len(m.proxies)
 }

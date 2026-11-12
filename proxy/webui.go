@@ -1,4 +1,3 @@
-
 package proxy
 
 const webUI = `<!DOCTYPE html>

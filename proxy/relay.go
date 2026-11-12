@@ -1,9 +1,6 @@
-
 package proxy
 
-import (
-	"io"
-)
+import "io"
 
 func copyBuffer(dst io.Writer, src io.Reader, buf []byte, decoder Codec, encoder Codec) (written int64, err error) {
 	if buf == nil {
@@ -11,14 +8,10 @@ func copyBuffer(dst io.Writer, src io.Reader, buf []byte, decoder Codec, encoder
 	}
 
 	for {
-		// 读取并解码
 		plaintext, readErr := decoder.Decode(src, buf)
-
-		// 有数据就先编码，再写入目标。
 		if len(plaintext) > 0 {
 			n, writeErr := encoder.Encode(dst, plaintext)
 			written += int64(n)
-
 			if writeErr != nil {
 				return written, writeErr
 			}
@@ -28,8 +21,35 @@ func copyBuffer(dst io.Writer, src io.Reader, buf []byte, decoder Codec, encoder
 			if readErr == io.EOF {
 				return written, nil
 			}
-
 			return written, readErr
 		}
 	}
+}
+
+// 下游 -> 上游：按 Inbound 解码，再按 Outbound 编码。
+func (p *Proxy) handleUpstream(srcConn, dstConn io.ReadWriter, outbound *OutboundConfig) error {
+	decoder, err := NewCodec(p.inbound.Crypto.Enabled, p.inbound.Crypto.Key)
+	if err != nil {
+		return err
+	}
+	encoder, err := NewCodec(outbound.Crypto.Enabled, outbound.Crypto.Key)
+	if err != nil {
+		return err
+	}
+	_, err = copyBuffer(dstConn, srcConn, nil, decoder, encoder)
+	return err
+}
+
+// 上游 -> 下游：按 Outbound 解码，再按 Inbound 编码。
+func (p *Proxy) handleDownstream(srcConn, dstConn io.ReadWriter, outbound *OutboundConfig) error {
+	decoder, err := NewCodec(outbound.Crypto.Enabled, outbound.Crypto.Key)
+	if err != nil {
+		return err
+	}
+	encoder, err := NewCodec(p.inbound.Crypto.Enabled, p.inbound.Crypto.Key)
+	if err != nil {
+		return err
+	}
+	_, err = copyBuffer(dstConn, srcConn, nil, decoder, encoder)
+	return err
 }

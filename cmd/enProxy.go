@@ -2,57 +2,71 @@ package main
 
 import (
 	"encoding/json"
-	"wangjui.com/enproxy/proxy"
+	"fmt"
 	"os"
 	"path/filepath"
+
 	com "wangjui.com/enproxy/common"
+	"wangjui.com/enproxy/proxy"
 )
 
 var cfg proxy.Config
 
-func readConfig(cfg *proxy.Config)  {
-	com.InitLogger("enproxy", "debug")
+func readConfig(cfg *proxy.Config) error {
 	configFileName := "config.json"
+
 	if len(os.Args) > 1 {
 		configFileName = os.Args[1]
 	}
-	configFileName, _ = filepath.Abs(configFileName)
-	com.Log.Infof("Loading config: %v", configFileName)
 
-	configFile, err := os.Open(configFileName)
+	absPath, err := filepath.Abs(configFileName)
 	if err != nil {
-		com.Log.Fatalf("File error: ", err.Error())
+		return fmt.Errorf("resolve config path failed: %w", err)
+	}
+
+	com.Log.Infof("Loading config: %s", absPath)
+
+	configFile, err := os.Open(absPath)
+	if err != nil {
+		return fmt.Errorf("open config file failed: %w", err)
 	}
 	defer configFile.Close()
 
 	jsonParser := json.NewDecoder(configFile)
 
-	if err := jsonParser.Decode(&cfg); err != nil {
-		com.Log.Fatalf("Config error: ", err.Error())
+	if err := jsonParser.Decode(cfg); err != nil {
+		return fmt.Errorf("decode config failed: %w", err)
 	}
+
+	return nil
 }
 
 func main() {
-	readConfig(&cfg)
+	// 初始化日志。
+	com.InitLogger("enproxy", "debug")
 
-	// 创建流量统计管理器
+	// 加载配置。
+	if err := readConfig(&cfg); err != nil {
+		com.Log.Fatalf("load config failed: %v", err)
+	}
+
+	// 创建流量统计管理器。
 	trafficManager := proxy.NewTrafficManager()
-	go trafficManager.Start()
 
-	// 创建多个代理。
-	proxyManager, err := proxy.NewProxyManager(cfg.Proxy, trafficManager)
+	// 创建代理管理器。
+	proxyManager, err := proxy.NewProxyManager(cfg, trafficManager)
 	if err != nil {
 		com.Log.Fatalf("create proxy manager failed: %v", err)
 	}
 
+	// 启动流量统计。
+	go trafficManager.Start()
+
+	// 启动所有代理入口，以及配置中启用的 Web Dashboard。
 	proxyManager.Start()
+
 	com.Log.Infof("started %d proxy instances", proxyManager.Count())
 
-	if cfg.Web.Enabled {
-		webServer := proxy.NewWebServer(cfg.Web.Listen, trafficManager)
-		go webServer.Run()
-	}
-
-	select {} // 阻塞主线程，防止退出
+	// 阻塞主线程，防止程序退出。
+	select {}
 }
-

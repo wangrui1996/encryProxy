@@ -1,129 +1,131 @@
 package proxy
 
 import (
+	"fmt"
 	"net"
 	"sync"
+
 	com "wangjui.com/enproxy/common"
 )
 
 type Proxy struct {
-	config ProxyConfig
-	rateLimit *RateLimit // 限速模块
-	traffic *Traffic // 流量统计模块
+	inbound       InboundConfig
+	accounts      *AccountManager
+	routeManager  *RouteManager
+	portRateLimit *RateLimit
+	traffic       *Traffic
 }
 
-func NewProxy(cfg ProxyConfig, trafficManager *TrafficManager) *Proxy {
+func NewProxy(inbound InboundConfig, accounts *AccountManager, routeManager *RouteManager, trafficManager *TrafficManager) *Proxy {
 	return &Proxy{
-		config:    cfg,
-		rateLimit: NewRateLimit(cfg.RateLimit),
-		traffic:   trafficManager.Register(cfg.Listen),
+		inbound:       inbound,
+		accounts:      accounts,
+		routeManager:  routeManager,
+		portRateLimit: NewRateLimit(inbound.RateLimit),
+		traffic:       trafficManager.Register(inbound.Listen),
 	}
 }
 
-func (p *Proxy) handleConnection(inboundConn net.Conn, reqUrl string) {
-	upstreamAddr, err := net.ResolveTCPAddr("tcp4", reqUrl)
-	if err != nil {
-		com.Log.Errorf("resolve upstream %s failed: %v", p.config.Upstream.Url, err)
-		return
-	}
+func (p *Proxy) handleConnection(inboundConn net.Conn) {
+	defer inboundConn.Close()
 
-	rateLimitedConn := NewRateLimitedConn(inboundConn, p.rateLimit)
-	wrappedInboundConn := NewTrafficConn(rateLimitedConn, p.traffic)
-
-	// 建立上游连接。
-	outboundConn, err := net.DialTCP("tcp", nil, upstreamAddr)
-	if err != nil {
-		com.Log.Errorf("dial upstream %s failed: %v",
-			p.config.Upstream.Url, err)
-		_ = wrappedInboundConn.Close()
-		return
-	}
-
-	func(inbound, outbound net.Conn) {
-		err := p.handleTCPClient(inbound, outbound)
+	var account *Account
+	if p.inbound.AuthRequired {
+		var err error
+		account, err = p.authenticate(inboundConn)
 		if err != nil {
-			com.Log.Errorf("handle client failed: %v", err)
+			com.Log.Errorf("client %s authentication failed on %s: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
+			return
 		}
-	}(wrappedInboundConn, outboundConn)
+		com.Log.Debugf("client %s authenticated as %s", inboundConn.RemoteAddr(), account.Name)
+	}
+
+	outbound, err := p.routeManager.Resolve(p.inbound.Tag)
+	if err != nil {
+		com.Log.Errorf("resolve route for inbound %s failed: %v", p.inbound.Tag, err)
+		return
+	}
+
+	outboundConn, err := net.Dial("tcp", outbound.Server)
+	if err != nil {
+		com.Log.Errorf("dial outbound %s (%s) failed: %v", outbound.Tag, outbound.Server, err)
+		return
+	}
+	defer outboundConn.Close()
+
+	// 认证发生在包装之前，因此认证帧不进入业务限速和流量统计。
+	var clientConn net.Conn = inboundConn
+	if p.portRateLimit != nil {
+		clientConn = NewRateLimitedConn(clientConn, p.portRateLimit)
+	}
+	if account != nil && account.RateLimit != nil {
+		clientConn = NewRateLimitedConn(clientConn, account.RateLimit)
+	}
+	clientConn = NewTrafficConn(clientConn, p.traffic)
+
+	if err := p.handleTCPClient(clientConn, outboundConn, outbound); err != nil {
+		com.Log.Errorf("handle client %s on %s failed: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
+	}
 }
 
 func (p *Proxy) Run() {
-	server, err := net.Listen("tcp", p.config.Listen)
+	server, err := net.Listen("tcp", p.inbound.Listen)
 	if err != nil {
-		com.Log.Errorf("listen %s failed: %v", p.config.Listen, err)
+		com.Log.Errorf("listen %s failed: %v", p.inbound.Listen, err)
 		return
 	}
 	defer server.Close()
 
-	com.Log.Infof("start to listen %s", p.config.Listen)
-
+	com.Log.Infof("inbound %s listening on %s", p.inbound.Tag, p.inbound.Listen)
 	for {
 		inboundConn, err := server.Accept()
 		if err != nil {
-			com.Log.Errorf("accept failed: %v", err)
+			com.Log.Errorf("accept on %s failed: %v", p.inbound.Listen, err)
 			continue
 		}
-
-		com.Log.Debugf("client %s connected", inboundConn.RemoteAddr())
-		go p.handleConnection(inboundConn, p.config.Upstream.Url)
+		com.Log.Debugf("client %s connected to %s", inboundConn.RemoteAddr(), p.inbound.Tag)
+		go p.handleConnection(inboundConn)
 	}
 }
 
-
 func closeWrite(conn net.Conn) {
-	if conn, ok := conn.(interface {
-		CloseWrite() error
-	}); ok {
+	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = conn.CloseWrite()
 		return
 	}
-
 	_ = conn.Close()
 }
 
-func (proxy *Proxy) handleTCPClient(inboundConn net.Conn, outboundConn net.Conn) error {
+func (p *Proxy) handleTCPClient(inboundConn, outboundConn net.Conn, outbound *OutboundConfig) error {
+	if outbound == nil {
+		return fmt.Errorf("outbound is nil")
+	}
+
 	var wait sync.WaitGroup
 	wait.Add(2)
-
 	errCh := make(chan error, 2)
 
 	go func() {
 		defer wait.Done()
-
-		// 下游 -> 上游
-		err := proxy.handleUpstream(
-			inboundConn,
-			outboundConn,
-		)
-
+		err := p.handleUpstream(inboundConn, outboundConn, outbound)
 		errCh <- err
-
 		if err != nil {
-			// 异常时关闭两端，唤醒另一个方向。
 			_ = inboundConn.Close()
 			_ = outboundConn.Close()
-			return;
+			return
 		}
-		// 正常 EOF，只关闭上游写方向。
 		closeWrite(outboundConn)
 	}()
 
 	go func() {
 		defer wait.Done()
-
-		// 上游 -> 下游
-		err := proxy.handleDownstream(
-			outboundConn,
-			inboundConn,
-		)
-
+		err := p.handleDownstream(outboundConn, inboundConn, outbound)
 		errCh <- err
-
 		if err != nil {
 			_ = inboundConn.Close()
 			_ = outboundConn.Close()
-			return;
-		} 
+			return
+		}
 		closeWrite(inboundConn)
 	}()
 
@@ -131,54 +133,10 @@ func (proxy *Proxy) handleTCPClient(inboundConn net.Conn, outboundConn net.Conn)
 	close(errCh)
 
 	var firstErr error
-
 	for err := range errCh {
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-
-	_ = inboundConn.Close()
-	_ = outboundConn.Close()
 	return firstErr
-}
-
-func (proxy *Proxy) handleUpstream(srcConn net.Conn, dstConn net.Conn) error {
-	// 下游接收数据时使用下游 Codec 解码。
-	decoder, err := NewCodec(
-		proxy.config.CryptoEnabled,
-		proxy.config.Key,
-	)
-	if err != nil {
-		return err
-	}
-
-	// 向上游发送数据时使用上游 Codec 编码。
-	encoder, err := NewCodec(proxy.config.Upstream.CryptoEnabled, proxy.config.Upstream.Key)
-	if err != nil {
-		return err
-	}
-
-	_, err = copyBuffer(dstConn, srcConn, nil, decoder, encoder)
-	return err
-}
-
-func (proxy *Proxy) handleDownstream(srcConn net.Conn, dstConn net.Conn) error {
-	// 上游接收数据时使用上游 Codec 解码。
-	decoder, err := NewCodec(
-		proxy.config.Upstream.CryptoEnabled,
-		proxy.config.Upstream.Key,
-	)
-	if err != nil {
-		return err
-	}
-
-	// 向下游发送数据时使用下游 Codec 编码。
-	encoder, err := NewCodec(proxy.config.CryptoEnabled, proxy.config.Key)
-	if err != nil {
-		return err
-	}
-
-	_, err = copyBuffer(dstConn, srcConn, nil, decoder, encoder)
-	return err
 }
