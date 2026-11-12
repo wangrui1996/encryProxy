@@ -4,7 +4,10 @@ import (
     "fmt"
     "net"
     "sync"
+
+    "wangjui.com/enproxy/proxy/common"
 )
+var Logger = common.Log
 
 type Proxy struct {
     inbound        InboundConfig

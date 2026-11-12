@@ -6,7 +6,11 @@ import (
     "log"
     "net/http"
     "time"
+
+    "wangjui.com/enproxy/proxy/common"
 )
+
+var Log = common.Log
 
 type WebServer struct {
     addr     string
