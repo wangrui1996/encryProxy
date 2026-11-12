@@ -4,6 +4,7 @@ import (
     "fmt"
     "net"
     "sync"
+    "context"
 
     "wangjui.com/enproxy/proxy/common"
 )
@@ -16,14 +17,16 @@ type Proxy struct {
     portRateLimit  *RateLimit
     traffic        *Traffic
     trafficManager *TrafficManager
+    outboundDialer *OutboundDialer
 }
 
-func NewProxy(inbound InboundConfig, accounts *AccountManager, routeManager *RouteManager, trafficManager *TrafficManager) *Proxy {
+func NewProxy(inbound InboundConfig, accounts *AccountManager, routeManager *RouteManager, trafficManager *TrafficManager, outboundDialer *OutboundDialer) *Proxy {
     return &Proxy{
         inbound: inbound, accounts: accounts, routeManager: routeManager,
         portRateLimit:  NewRateLimit(inbound.RateLimit),
         traffic:        trafficManager.Register(inbound.Listen),
         trafficManager: trafficManager,
+        outboundDialer: outboundDialer,
     }
 }
 
@@ -35,29 +38,29 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
         var err error
         account, err = p.authenticate(inboundConn)
         if err != nil {
-            Log.Errorf("client %s authentication failed on %s: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
+            Logger.Errorf("client %s authentication failed on %s: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
             return
         }
         accountName = account.Name
-        Log.Debugf("client %s authenticated as %s", inboundConn.RemoteAddr(), account.Name)
+        Logger.Debugf("client %s authenticated as %s", inboundConn.RemoteAddr(), account.Name)
     }
     outbound, err := p.routeManager.Resolve(p.inbound.Tag)
     if err != nil {
-        Log.Errorf("resolve route for inbound %s failed: %v", p.inbound.Tag, err)
+        Logger.Errorf("resolve route for inbound %s failed: %v", p.inbound.Tag, err)
         return
     }
-    outboundConn, err := net.Dial("tcp", outbound.Server)
+    outboundConn, err := p.outboundDialer.DialContext(context.Background(), outbound.Server)
     if err != nil {
-        Log.Errorf("dial outbound %s (%s) failed: %v", outbound.Tag, outbound.Server, err)
+        Logger.Errorf("dial outbound %s (%s) failed: %v", outbound.Tag, outbound.Server, err)
         return
     }
     defer outboundConn.Close()
     if outbound.Account != nil {
         if err := authenticateOutbound(outboundConn, outbound.Account, outbound.Crypto); err != nil {
-            Log.Errorf("authenticate outbound %s (%s) failed: %v", outbound.Tag, outbound.Server, err)
+            Logger.Errorf("authenticate outbound %s (%s) failed: %v", outbound.Tag, outbound.Server, err)
             return
         }
-        Log.Debugf("authenticated to outbound %s as %s", outbound.Tag, outbound.Account.Username)
+        Logger.Debugf("authenticated to outbound %s as %s", outbound.Tag, outbound.Account.Username)
     }
     var clientConn net.Conn = inboundConn
     if p.portRateLimit != nil {
@@ -69,25 +72,25 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
     userTraffic := p.trafficManager.RegisterUser(accountName)
     clientConn = NewTrafficConn(clientConn, p.traffic, userTraffic)
     if err := p.handleTCPClient(clientConn, outboundConn, outbound); err != nil {
-        Log.Errorf("handle client %s on %s failed: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
+        Logger.Errorf("handle client %s on %s failed: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
     }
 }
 
 func (p *Proxy) Run() {
     server, err := net.Listen("tcp", p.inbound.Listen)
     if err != nil {
-        Log.Errorf("listen %s failed: %v", p.inbound.Listen, err)
+        Logger.Errorf("listen %s failed: %v", p.inbound.Listen, err)
         return
     }
     defer server.Close()
-    Log.Infof("inbound %s listening on %s", p.inbound.Tag, p.inbound.Listen)
+    Logger.Infof("inbound %s listening on %s", p.inbound.Tag, p.inbound.Listen)
     for {
         inboundConn, err := server.Accept()
         if err != nil {
-            Log.Errorf("accept on %s failed: %v", p.inbound.Listen, err)
+            Logger.Errorf("accept on %s failed: %v", p.inbound.Listen, err)
             continue
         }
-        Log.Debugf("client %s connected to %s", inboundConn.RemoteAddr(), p.inbound.Tag)
+        Logger.Debugf("client %s connected to %s", inboundConn.RemoteAddr(), p.inbound.Tag)
         go p.handleConnection(inboundConn)
     }
 }

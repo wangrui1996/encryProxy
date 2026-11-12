@@ -3,6 +3,9 @@ package proxy
 import (
     "fmt"
     "net"
+    "strconv"
+    "time"
+    "strings"
 )
 
 type ProxyManager struct {
@@ -12,6 +15,8 @@ type ProxyManager struct {
     webServer      *WebServer
     inbounds       []InboundConfig
     accounts       []AccountConfig
+    dnsResolver    *DNSResolver
+    outboundDialer *OutboundDialer
 }
 
 // 校验密码是否合理
@@ -36,6 +41,36 @@ func ValidateListenAddr(tag, listen string, seen map[string]struct{}) error {
         return fmt.Errorf("inbound %q invalid listen address: %w", tag, err)
     }
     seen[listen] = struct{}{}
+    return nil
+}
+
+func ValidateOutboundAddr(tag, address string) error {
+    host, port, err := net.SplitHostPort(address)
+    if err != nil {
+        return fmt.Errorf(
+            "outbound %q invalid server address %q: %w",
+            tag,
+            address,
+            err,
+        )
+    }
+
+    if host == "" {
+        return fmt.Errorf(
+            "outbound %q server host is empty",
+            tag,
+        )
+    }
+
+    portNumber, err := strconv.Atoi(port)
+    if err != nil || portNumber < 1 || portNumber > 65535 {
+        return fmt.Errorf(
+            "outbound %q invalid server port %q",
+            tag,
+            port,
+        )
+    }
+
     return nil
 }
 
@@ -91,16 +126,41 @@ func ValidateOutbounds(outbounds []OutboundConfig) error {
         if outbound.Server == "" {
             return fmt.Errorf("outbound %q server address is empty", outbound.Tag)
         }
-        if _, err := net.ResolveTCPAddr("tcp", outbound.Server); err != nil {
-            return fmt.Errorf("outbound %q invalid server address: %w", outbound.Tag, err)
-        }
         if outbound.Crypto.Enabled {
             if err := ValidateAESKey(outbound.Crypto.Key); err != nil {
                 return fmt.Errorf("outbound %q crypto: %w", outbound.Tag, err)
             }
         }
+        if err := ValidateOutboundAddr(outbound.Tag, outbound.Server); err != nil {
+            return err
+        }
     }
     return nil;
+}
+
+func (c *DNSConfig) Validate() error {
+    if c == nil {
+        return nil
+    }
+
+    if strings.TrimSpace(c.CacheTTL) == "" {
+        return fmt.Errorf("dns.cache_ttl is required")
+    }
+
+    ttl, err := time.ParseDuration(c.CacheTTL)
+    if err != nil {
+        return fmt.Errorf(
+            "invalid dns.cache_ttl %q: %w",
+            c.CacheTTL,
+            err,
+        )
+    }
+
+    if ttl <= 0 {
+        return fmt.Errorf("dns.cache_ttl must be greater than zero")
+    }
+
+    return nil
 }
 
 // 代理总管理程序
@@ -108,6 +168,12 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
     if trafficManager == nil {
         return nil, fmt.Errorf("traffic manager is nil")
     }
+
+    dnsResolver, err := NewDNSResolver(cfg.DNS)
+    if err != nil {
+        return nil, fmt.Errorf("initialize DNS resolver: %w", err)
+    }
+    outboundDialer := NewOutboundDialer(dnsResolver)
     if err := ValidateInbounds(cfg.Inbounds); err != nil {
         return nil, err
     }
@@ -128,9 +194,17 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
     if err != nil {
         return nil, err
     }
-    manager := &ProxyManager{proxies: make([]*Proxy, 0, len(cfg.Inbounds)), trafficManager: trafficManager, webConfig: cfg.Web, inbounds: append([]InboundConfig(nil), cfg.Inbounds...), accounts: append([]AccountConfig(nil), cfg.Accounts...)}
+    manager := &ProxyManager{
+        proxies: make([]*Proxy, 0, len(cfg.Inbounds)),
+        trafficManager: trafficManager,
+        webConfig: cfg.Web,
+        inbounds: append([]InboundConfig(nil), cfg.Inbounds...),
+        accounts: append([]AccountConfig(nil), cfg.Accounts...),
+        dnsResolver:    dnsResolver,
+        outboundDialer: outboundDialer,
+    }
     for _, in := range cfg.Inbounds {
-        manager.proxies = append(manager.proxies, NewProxy(in, accounts, routes, trafficManager))
+        manager.proxies = append(manager.proxies, NewProxy(in, accounts, routes, trafficManager, outboundDialer))
     }
     if cfg.Web.Enabled && cfg.Web.Listen == "" {
         return nil, fmt.Errorf("web.listen is empty while web.enabled is true")

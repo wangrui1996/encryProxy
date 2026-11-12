@@ -3,14 +3,13 @@ package proxy
 import (
     "context"
     "encoding/json"
-    "log"
     "net/http"
     "time"
 
-    "wangjui.com/enproxy/proxy/common"
+//    "wangjui.com/enproxy/proxy/common"
 )
 
-var Log = common.Log
+//var Logger = common.Log
 
 type WebServer struct {
     addr     string
@@ -39,7 +38,7 @@ func NewWebServer(addr string, traffic *TrafficManager, inbounds []InboundConfig
 
 func (w *WebServer) Run() {
     if err := w.Start(); err != nil && err != http.ErrServerClosed {
-        Log.Fatalf("web server failed: %v", err)
+        Logger.Fatalf("web server failed: %v", err)
     }
 }
 
@@ -53,7 +52,7 @@ func (w *WebServer) Start() error {
     mux.HandleFunc("/api/traffic/history/monthly", w.handleMonthly)
     mux.HandleFunc("/api/limits", w.handleLimits)
     w.server = &http.Server{Addr: w.addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-    log.Printf("Web dashboard listening on http://%s", w.addr)
+    Logger.Printf("Web dashboard listening on http://%s", w.addr)
     return w.server.ListenAndServe()
 }
 func (w *WebServer) Shutdown(ctx context.Context) error {
@@ -65,7 +64,7 @@ func (w *WebServer) Shutdown(ctx context.Context) error {
 func writeJSON(rw http.ResponseWriter, data interface{}) {
     rw.Header().Set("Content-Type", "application/json; charset=utf-8")
     if err := json.NewEncoder(rw).Encode(data); err != nil {
-        log.Printf("encode JSON failed: %v", err)
+        Logger.Printf("encode JSON failed: %v", err)
     }
 }
 func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {

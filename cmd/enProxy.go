@@ -24,7 +24,7 @@ func readConfig(cfg *proxy.Config) error {
 		return fmt.Errorf("resolve config path failed: %w", err)
 	}
 
-	proxy.Log.Infof("Loading config: %s", absPath)
+	common.Log.Infof("Loading config: %s", absPath)
 
 	configFile, err := os.Open(absPath)
 	if err != nil {
