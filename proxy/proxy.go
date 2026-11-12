@@ -64,7 +64,7 @@ func (p *Proxy) Run() {
 			continue
 		}
 
-		com.Log.Infof("client %s connected", inboundConn.RemoteAddr())
+		com.Log.Debugf("client %s connected", inboundConn.RemoteAddr())
 		go p.handleConnection(inboundConn, p.config.Upstream.Url)
 	}
 }
@@ -140,7 +140,6 @@ func (proxy *Proxy) handleTCPClient(inboundConn net.Conn, outboundConn net.Conn)
 
 	_ = inboundConn.Close()
 	_ = outboundConn.Close()
-	com.Log.Infof("IP %s login exit", inboundConn.RemoteAddr())
 	return firstErr
 }
 
