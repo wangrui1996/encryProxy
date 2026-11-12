@@ -163,3 +163,47 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 	}
 	return account, nil
 }
+
+// authenticateOutbound 向上游发送认证请求并验证响应。
+func authenticateOutbound(
+    conn net.Conn,
+    account *OutboundAccountConfig,
+    crypto CryptoConfig,
+) error {
+    if account == nil {
+        return nil
+    }
+
+    if err := conn.SetDeadline(time.Now().Add(authTimeout)); err != nil {
+        return fmt.Errorf("set outbound authentication deadline: %w", err)
+    }
+    defer conn.SetDeadline(time.Time{})
+
+    // 1. 构造认证请求。
+    payload, err := EncodeAuthRequest(
+        account.Username,
+        account.Password,
+    )
+    if err != nil {
+        return fmt.Errorf("encode authentication request: %w", err)
+    }
+
+    // 2. 发送认证请求。
+    // 加密与否由 Outbound.Crypto 决定。
+    if err := writeAuthFrame(conn, payload, crypto); err != nil {
+        return fmt.Errorf("write authentication request: %w", err)
+    }
+
+    // 3. 接收认证响应。
+    response, err := readAuthFrame(conn, crypto)
+    if err != nil {
+        return fmt.Errorf("read authentication response: %w", err)
+    }
+
+    // 4. 检查认证结果。
+    if err := DecodeAuthResponse(response); err != nil {
+        return fmt.Errorf("upstream authentication rejected: %w", err)
+    }
+
+    return nil
+}

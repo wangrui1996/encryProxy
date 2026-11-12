@@ -7,13 +7,13 @@
     {
       "tag": "in-12348",
       "listen": "0.0.0.0:12348",
-      "auth_required": true,
+      "auth_required": false,
       "crypto": {
-        "enabled": true,
+        "enabled": false,
         "key": "GIF34US6WlaL4Ayx"
       },
       "rate_limit": {
-        "up_kbps": 0,
+        "up_kbps": 512,
         "down_kbps": 0
       }
     }
@@ -26,10 +26,6 @@
       "crypto": {
         "enabled": false,
         "key": ""
-      },
-      "account": {
-        "username": "upstream_a",
-        "password": "password_a"
       }
     }
   ],

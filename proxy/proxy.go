@@ -53,6 +53,29 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
 	}
 	defer outboundConn.Close()
 
+	// 如果配置了上游账号，先完成上游认证。
+	if outbound.Account != nil {
+		if err := authenticateOutbound(
+			outboundConn,
+			outbound.Account,
+			outbound.Crypto,
+		); err != nil {
+			com.Log.Errorf(
+				"authenticate outbound %s (%s) failed: %v",
+				outbound.Tag,
+				outbound.Server,
+				err,
+			)
+			return
+		}
+
+		com.Log.Debugf(
+			"authenticated to outbound %s as %s",
+			outbound.Tag,
+			outbound.Account.Username,
+		)
+	}
+
 	// 认证发生在包装之前，因此认证帧不进入业务限速和流量统计。
 	var clientConn net.Conn = inboundConn
 	if p.portRateLimit != nil {
