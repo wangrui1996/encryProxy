@@ -6,8 +6,6 @@ import (
     "log"
     "net/http"
     "time"
-
-    com "wangjui.com/enproxy/common"
 )
 
 type WebServer struct {
@@ -24,7 +22,7 @@ func NewWebServer(addr string, traffic *TrafficManager, inbounds []InboundConfig
 
 func (w *WebServer) Run() {
     if err := w.Start(); err != nil && err != http.ErrServerClosed {
-        com.Log.Fatalf("web server failed: %v", err)
+        Log.Fatalf("web server failed: %v", err)
     }
 }
 

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	com "wangjui.com/enproxy/common"
 	"wangjui.com/enproxy/proxy"
 )
 
@@ -24,7 +23,7 @@ func readConfig(cfg *proxy.Config) error {
 		return fmt.Errorf("resolve config path failed: %w", err)
 	}
 
-	com.Log.Infof("Loading config: %s", absPath)
+	proxy.Log.Infof("Loading config: %s", absPath)
 
 	configFile, err := os.Open(absPath)
 	if err != nil {
@@ -43,11 +42,11 @@ func readConfig(cfg *proxy.Config) error {
 
 func main() {
 	// 初始化日志。
-	com.InitLogger("enproxy", "debug")
+	proxy.InitLogger("enproxy", "debug")
 
 	// 加载配置。
 	if err := readConfig(&cfg); err != nil {
-		com.Log.Fatalf("load config failed: %v", err)
+		proxy.Log.Fatalf("load config failed: %v", err)
 	}
 
 	// 创建流量统计管理器。
@@ -56,7 +55,7 @@ func main() {
 	// 创建代理管理器。
 	proxyManager, err := proxy.NewProxyManager(cfg, trafficManager)
 	if err != nil {
-		com.Log.Fatalf("create proxy manager failed: %v", err)
+		proxy.Log.Fatalf("create proxy manager failed: %v", err)
 	}
 
 	// 启动流量统计。
@@ -65,7 +64,7 @@ func main() {
 	// 启动所有代理入口，以及配置中启用的 Web Dashboard。
 	proxyManager.Start()
 
-	com.Log.Infof("started %d proxy instances", proxyManager.Count())
+	proxy.Log.Infof("started %d proxy instances", proxyManager.Count())
 
 	// 阻塞主线程，防止程序退出。
 	select {}
