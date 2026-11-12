@@ -2,11 +2,12 @@
 package proxy
 
 type Config struct {
-	Proxy ProxyConfig `json:"proxy"`
+	Proxy []ProxyConfig `json:"proxy"`
 	Web   WebConfig   `json:"web"`
 }
 
 type ProxyConfig struct {
+	Name          string          `json:"name"`
 	Listen        string         `json:"listen"`
 	CryptoEnabled bool           `json:"crypto_enabled"`
 	Key           string         `json:"key"`
