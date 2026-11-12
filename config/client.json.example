@@ -1,0 +1,45 @@
+{
+  "web": {
+    "enabled": false,
+    "listen": "0.0.0.0:19998"
+  },
+  "inbounds": [
+    {
+      "tag": "in-12341",
+      "listen": "0.0.0.0:12341",
+      "auth_required": false,
+      "crypto": {
+        "enabled": false,
+        "key": "GIF34US6WlaL4Ayx"
+      },
+      "rate_limit": {
+        "up_kbps": 0,
+        "down_kbps": 0
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "out-3022",
+      "protocol": "tcp",
+      "server": "127.0.0.1:12342",
+      "crypto": {
+        "enabled": true,
+        "key": "GIF34US6WlaL4Ayx"
+      },
+      "account": {
+        "username": "upstream_a",
+        "password": "password_a"
+      }
+    }
+  ],
+  "route": {
+    "default": "out-3022",
+    "rules": [
+      {
+        "inbound": ["in-12341"],
+        "outbound": "out-3022"
+      }
+    ]
+  }
+}

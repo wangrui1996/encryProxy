@@ -5,91 +5,120 @@ import (
     "net"
 )
 
-// ProxyManager 管理多个 TCP 代理。
 type ProxyManager struct {
-    proxy []*Proxy
+    proxies        []*Proxy
+    trafficManager *TrafficManager
+    webConfig      WebConfig
+    webServer      *WebServer
+    inbounds       []InboundConfig
+    accounts       []AccountConfig
 }
 
-// NewProxyManager 创建代理管理器。
-func NewProxyManager(configs []ProxyConfig, trafficManager *TrafficManager) (*ProxyManager, error) {
-
+func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager, error) {
     if trafficManager == nil {
         return nil, fmt.Errorf("traffic manager is nil")
     }
-
-    if len(configs) == 0 {
-        return nil, fmt.Errorf("no proxy configured")
+    if len(cfg.Inbounds) == 0 {
+        return nil, fmt.Errorf("no inbound configured")
     }
-
-    manager := &ProxyManager{
-        proxy: make([]*Proxy, 0, len(configs)),
+    if len(cfg.Outbounds) == 0 {
+        return nil, fmt.Errorf("no outbound configured")
     }
-
-    // 防止多个代理监听同一个地址。
-    listenSet := make(map[string]struct{})
-
-    for _, cfg := range configs {
-
-        if cfg.Listen == "" {
-            return nil, fmt.Errorf(
-                "proxy %q listen address is empty",
-                cfg.Name,
-            )
+    inboundTags := make(map[string]struct{}, len(cfg.Inbounds))
+    listenSet := make(map[string]struct{}, len(cfg.Inbounds))
+    for i := range cfg.Inbounds {
+        inbound := &cfg.Inbounds[i]
+        if inbound.Tag == "" {
+            return nil, fmt.Errorf("inbound tag is empty")
         }
-
-        if cfg.Upstream.Url == "" {
-            return nil, fmt.Errorf(
-                "proxy %q upstream address is empty",
-                cfg.Name,
-            )
+        if _, exists := inboundTags[inbound.Tag]; exists {
+            return nil, fmt.Errorf("duplicate inbound tag: %s", inbound.Tag)
         }
-
-        if _, exists := listenSet[cfg.Listen]; exists {
-            return nil, fmt.Errorf(
-                "duplicate proxy listen address: %s",
-                cfg.Listen,
-            )
+        inboundTags[inbound.Tag] = struct{}{}
+        if inbound.Listen == "" {
+            return nil, fmt.Errorf("inbound %q listen address is empty", inbound.Tag)
         }
-
-        // 检查监听地址格式。
-        if _, err := net.ResolveTCPAddr("tcp", cfg.Listen); err != nil {
-            return nil, fmt.Errorf(
-                "proxy %q invalid listen address: %w",
-                cfg.Name,
-                err,
-            )
+        if _, exists := listenSet[inbound.Listen]; exists {
+            return nil, fmt.Errorf("duplicate inbound listen address: %s", inbound.Listen)
         }
-
-        // 检查上游地址格式。
-        if _, err := net.ResolveTCPAddr("tcp", cfg.Upstream.Url); err != nil {
-            return nil, fmt.Errorf(
-                "proxy %q invalid upstream address: %w",
-                cfg.Name,
-                err,
-            )
+        if _, err := net.ResolveTCPAddr("tcp", inbound.Listen); err != nil {
+            return nil, fmt.Errorf("inbound %q invalid listen address: %w", inbound.Tag, err)
         }
-
-        listenSet[cfg.Listen] = struct{}{}
-
-        manager.proxy = append(
-            manager.proxy,
-            NewProxy(cfg, trafficManager),
-        )
+        listenSet[inbound.Listen] = struct{}{}
+        if inbound.Crypto.Enabled {
+            if err := validateAESKey(inbound.Crypto.Key); err != nil {
+                return nil, fmt.Errorf("inbound %q crypto: %w", inbound.Tag, err)
+            }
+        }
     }
-
+    outboundTags := make(map[string]struct{}, len(cfg.Outbounds))
+    for i := range cfg.Outbounds {
+        outbound := &cfg.Outbounds[i]
+        if outbound.Tag == "" {
+            return nil, fmt.Errorf("outbound tag is empty")
+        }
+        if _, exists := outboundTags[outbound.Tag]; exists {
+            return nil, fmt.Errorf("duplicate outbound tag: %s", outbound.Tag)
+        }
+        outboundTags[outbound.Tag] = struct{}{}
+        if outbound.Protocol == "" {
+            outbound.Protocol = "tcp"
+        }
+        if outbound.Protocol != "tcp" {
+            return nil, fmt.Errorf("outbound %q unsupported protocol %q", outbound.Tag, outbound.Protocol)
+        }
+        if outbound.Server == "" {
+            return nil, fmt.Errorf("outbound %q server address is empty", outbound.Tag)
+        }
+        if _, err := net.ResolveTCPAddr("tcp", outbound.Server); err != nil {
+            return nil, fmt.Errorf("outbound %q invalid server address: %w", outbound.Tag, err)
+        }
+        if outbound.Crypto.Enabled {
+            if err := validateAESKey(outbound.Crypto.Key); err != nil {
+                return nil, fmt.Errorf("outbound %q crypto: %w", outbound.Tag, err)
+            }
+        }
+    }
+    accounts, err := NewAccountManager(cfg.Accounts)
+    if err != nil {
+        return nil, err
+    }
+    for _, inbound := range cfg.Inbounds {
+        if inbound.AuthRequired && accounts.Count() == 0 {
+            return nil, fmt.Errorf("inbound %q requires authentication but no accounts are configured", inbound.Tag)
+        }
+    }
+    routes, err := NewRouteManager(cfg.Route, cfg.Inbounds, cfg.Outbounds)
+    if err != nil {
+        return nil, err
+    }
+    manager := &ProxyManager{proxies: make([]*Proxy, 0, len(cfg.Inbounds)), trafficManager: trafficManager, webConfig: cfg.Web, inbounds: append([]InboundConfig(nil), cfg.Inbounds...), accounts: append([]AccountConfig(nil), cfg.Accounts...)}
+    for _, in := range cfg.Inbounds {
+        manager.proxies = append(manager.proxies, NewProxy(in, accounts, routes, trafficManager))
+    }
+    if cfg.Web.Enabled && cfg.Web.Listen == "" {
+        return nil, fmt.Errorf("web.listen is empty while web.enabled is true")
+    }
     return manager, nil
 }
 
-// Start 启动所有代理。
-func (m *ProxyManager) Start() {
-    for _, proxy := range m.proxy {
-        p := proxy
-
-        go p.Run()
+func validateAESKey(key string) error {
+    switch len([]byte(key)) {
+    case 16, 24, 32:
+        return nil
+    default:
+        return fmt.Errorf("AES key must be 16, 24, or 32 bytes; got %d", len([]byte(key)))
     }
 }
 
-// Count 获取代理数量。
-func (m *ProxyManager) Count() int {
-    return len(m.proxy)
+func (m *ProxyManager) Start() {
+    for _, p := range m.proxies {
+        proxy := p
+        go proxy.Run()
+    }
+    if m.webConfig.Enabled {
+        m.webServer = NewWebServer(m.webConfig.Listen, m.trafficManager, m.inbounds, m.accounts)
+        go m.webServer.Run()
+    }
 }
+func (m *ProxyManager) Count() int { return len(m.proxies) }

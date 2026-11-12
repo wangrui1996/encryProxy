@@ -3,36 +3,50 @@
     "enabled": true,
     "listen": "0.0.0.0:19998"
   },
-  "proxy": [{
-    "listen": "0.0.0.0:12348",
-    "crypto_enabled": false,
-    "key": "GIF34US6WlaL4Ayx",
-    "rate_limit": {
-      "up_kbps": 0,
-      "down_kbps": 0
-    },
-    "upstream": {
-      "name": "",
-      "url": "10.44.0.10:3022",
-      "crypto_enabled": false,
-      "key": "GIF34US6WlaL4Ayx"
-      }
-    },
+  "inbounds": [
     {
-    "listen": "0.0.0.0:12344",
-    "crypto_enabled": false,
-    "key": "GIF34US6WlaL4Ayx",
-    "rate_limit": {
-      "up_kbps": 0,
-      "down_kbps": 0
-    },
-    "upstream": {
-      "name": "",
-      "url": "10.44.0.10:3022",
-      "crypto_enabled": false,
-      "key": "GIF34US6WlaL4Ayx"
+      "tag": "in-12348",
+      "listen": "0.0.0.0:12348",
+      "auth_required": false,
+      "crypto": {
+        "enabled": false,
+        "key": "GIF34US6WlaL4Ayx"
+      },
+      "rate_limit": {
+        "up_kbps": 512,
+        "down_kbps": 0
       }
     }
-  ]
-
+  ],
+  "outbounds": [
+    {
+      "tag": "out-3022",
+      "protocol": "tcp",
+      "server": "10.44.0.10:3022",
+      "crypto": {
+        "enabled": false,
+        "key": ""
+      }
+    }
+  ],
+  "accounts": [
+    {
+      "name": "user_a",
+      "password": "password_a",
+      "enabled": true,
+      "rate_limit": {
+        "up_kbps": 100,
+        "down_kbps": 200
+      }
+    }
+  ],
+  "route": {
+    "default": "out-3022",
+    "rules": [
+      {
+        "inbound": ["in-12348"],
+        "outbound": "out-3022"
+      }
+    ]
+  }
 }
