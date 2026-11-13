@@ -1,15 +1,19 @@
 package proxy
 
-import "fmt"
+import (
+    "fmt"
+    "wangjui.com/enproxy/proxy/config"
+)
+
 
 // RouteManager 根据 Inbound Tag 选择 Outbound。
 type RouteManager struct {
-    defaultOutbound *OutboundConfig
-    rules           map[string]*OutboundConfig
+    defaultOutbound *config.OutboundConfig
+    rules           map[string]*config.OutboundConfig
 }
 
-func NewRouteManager(cfg RouteConfig, inbounds []InboundConfig, outbounds []OutboundConfig) (*RouteManager, error) {
-    outboundMap := make(map[string]*OutboundConfig, len(outbounds))
+func NewRouteManager(cfg config.RouteConfig, inbounds []config.InboundConfig, outbounds []config.OutboundConfig) (*RouteManager, error) {
+    outboundMap := make(map[string]*config.OutboundConfig, len(outbounds))
     for i := range outbounds {
         outbound := outbounds[i]
         if outbound.Tag == "" {
@@ -22,7 +26,7 @@ func NewRouteManager(cfg RouteConfig, inbounds []InboundConfig, outbounds []Outb
     }
 
     manager := &RouteManager{
-        rules: make(map[string]*OutboundConfig),
+        rules: make(map[string]*config.OutboundConfig),
     }
 
     if cfg.Default != "" {
@@ -70,7 +74,7 @@ func NewRouteManager(cfg RouteConfig, inbounds []InboundConfig, outbounds []Outb
     return manager, nil
 }
 
-func (m *RouteManager) Resolve(inboundTag string) (*OutboundConfig, error) {
+func (m *RouteManager) Resolve(inboundTag string) (*config.OutboundConfig, error) {
     if m == nil {
         return nil, fmt.Errorf("route manager is nil")
     }

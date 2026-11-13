@@ -5,10 +5,12 @@ import (
     "net"
     "sync"
     "context"
+
+    "wangjui.com/enproxy/proxy/config"
 )
 
 type Proxy struct {
-    inbound        InboundConfig
+    inbound        config.InboundConfig
     accounts       *AccountManager
     routeManager   *RouteManager
     portRateLimit  *RateLimit
@@ -17,7 +19,7 @@ type Proxy struct {
     outboundDialer *OutboundDialer
 }
 
-func NewProxy(inbound InboundConfig, accounts *AccountManager, routeManager *RouteManager, trafficManager *TrafficManager, outboundDialer *OutboundDialer) *Proxy {
+func NewProxy(inbound config.InboundConfig, accounts *AccountManager, routeManager *RouteManager, trafficManager *TrafficManager, outboundDialer *OutboundDialer) *Proxy {
     return &Proxy{
         inbound: inbound, accounts: accounts, routeManager: routeManager,
         portRateLimit:  NewRateLimit(inbound.RateLimit),
@@ -100,7 +102,7 @@ func closeWrite(conn net.Conn) {
     _ = conn.Close()
 }
 
-func (p *Proxy) handleTCPClient(inboundConn, outboundConn net.Conn, outbound *OutboundConfig) error {
+func (p *Proxy) handleTCPClient(inboundConn, outboundConn net.Conn, outbound *config.OutboundConfig) error {
     if outbound == nil {
         return fmt.Errorf("outbound is nil")
     }

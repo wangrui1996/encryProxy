@@ -1,6 +1,9 @@
 package proxy
+import (
+    "io"
 
-import "io"
+    "wangjui.com/enproxy/proxy/config"
+)
 
 func copyBuffer(dst io.Writer, src io.Reader, buf []byte, decoder Codec, encoder Codec) (written int64, err error) {
     if buf == nil {
@@ -27,7 +30,7 @@ func copyBuffer(dst io.Writer, src io.Reader, buf []byte, decoder Codec, encoder
 }
 
 // 下游 -> 上游：按 Inbound 解码，再按 Outbound 编码。
-func (p *Proxy) handleUpstream(srcConn, dstConn io.ReadWriter, outbound *OutboundConfig) error {
+func (p *Proxy) handleUpstream(srcConn, dstConn io.ReadWriter, outbound *config.OutboundConfig) error {
     decoder, err := NewCodec(p.inbound.Crypto.Enabled, p.inbound.Crypto.Key)
     if err != nil {
         return err
@@ -41,7 +44,7 @@ func (p *Proxy) handleUpstream(srcConn, dstConn io.ReadWriter, outbound *Outboun
 }
 
 // 上游 -> 下游：按 Outbound 解码，再按 Inbound 编码。
-func (p *Proxy) handleDownstream(srcConn, dstConn io.ReadWriter, outbound *OutboundConfig) error {
+func (p *Proxy) handleDownstream(srcConn, dstConn io.ReadWriter, outbound *config.OutboundConfig) error {
     decoder, err := NewCodec(outbound.Crypto.Enabled, outbound.Crypto.Key)
     if err != nil {
         return err

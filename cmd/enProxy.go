@@ -8,11 +8,13 @@ import (
 
 	"wangjui.com/enproxy/proxy"
 	"wangjui.com/enproxy/proxy/common"
+
+	"wangjui.com/enproxy/proxy/config"
 )
 
-var cfg proxy.Config
 
-func readConfig(cfg *proxy.Config) error {
+
+func readConfig(cfg *config.Config) error {
 	configFileName := "config.json"
 
 	if len(os.Args) > 1 {
@@ -46,6 +48,7 @@ func main() {
 	common.InitLogger("enproxy", "debug")
 
 	// 加载配置。
+	var cfg config.Config
 	if err := readConfig(&cfg); err != nil {
 		common.Log.Fatalf("load config failed: %v", err)
 	}

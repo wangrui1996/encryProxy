@@ -4,6 +4,8 @@ import (
     "context"
     "net"
     "golang.org/x/time/rate"
+
+    "wangjui.com/enproxy/proxy/config"
 )
 
 type RateLimit struct {
@@ -11,7 +13,7 @@ type RateLimit struct {
     downloadLimiter *rate.Limiter
 }
 
-func NewRateLimit(cfg RateLimitConfig) *RateLimit {
+func NewRateLimit(cfg config.RateLimitConfig) *RateLimit {
     r := &RateLimit{}
 
     const burst = 32 * 1024

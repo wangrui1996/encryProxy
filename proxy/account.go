@@ -4,6 +4,8 @@ import (
     "crypto/subtle"
     "fmt"
     "sync"
+
+    "wangjui.com/enproxy/proxy/config"
 )
 
 // Account 是认证成功后返回的运行时账号。
@@ -25,7 +27,7 @@ type AccountManager struct {
     accounts map[string]*accountEntry
 }
 
-func NewAccountManager(configs []AccountConfig) (*AccountManager, error) {
+func NewAccountManager(configs []config.AccountConfig) (*AccountManager, error) {
     manager := &AccountManager{
         accounts: make(map[string]*accountEntry, len(configs)),
     }

@@ -5,17 +5,18 @@ import (
     "net"
     "strconv"
     "time"
-    "strings"
     "context"
+
+    "wangjui.com/enproxy/proxy/config"
 )
 
 type ProxyManager struct {
     proxies        []*Proxy
     trafficManager *TrafficManager
-    webConfig      WebConfig
+    webConfig      config.WebConfig
     webServer      *WebServer
-    inbounds       []InboundConfig
-    accounts       []AccountConfig
+    inbounds       []config.InboundConfig
+    accounts       []config.AccountConfig
     dnsResolver    *DNSResolver
     outboundDialer *OutboundDialer
 }
@@ -76,7 +77,7 @@ func ValidateOutboundAddr(tag, address string) error {
 }
 
 // 验证 inbounds 配置文件
-func ValidateInbounds(inbounds []InboundConfig) error {
+func ValidateInbounds(inbounds []config.InboundConfig) error {
     if len(inbounds) == 0 {
         return fmt.Errorf("no inbound configured")
     }
@@ -104,7 +105,7 @@ func ValidateInbounds(inbounds []InboundConfig) error {
 }
 
 // 验证 Outbound 配置文件
-func ValidateOutbounds(outbounds []OutboundConfig) error {
+func ValidateOutbounds(outbounds []config.OutboundConfig) error {
     if len(outbounds) == 0 {
         return fmt.Errorf("no outbound configured")
     }
@@ -139,33 +140,8 @@ func ValidateOutbounds(outbounds []OutboundConfig) error {
     return nil;
 }
 
-func (c *DNSConfig) Validate() error {
-    if c == nil {
-        return nil
-    }
-
-    if strings.TrimSpace(c.CacheTTL) == "" {
-        return fmt.Errorf("dns.cache_ttl is required")
-    }
-
-    ttl, err := time.ParseDuration(c.CacheTTL)
-    if err != nil {
-        return fmt.Errorf(
-            "invalid dns.cache_ttl %q: %w",
-            c.CacheTTL,
-            err,
-        )
-    }
-
-    if ttl <= 0 {
-        return fmt.Errorf("dns.cache_ttl must be greater than zero")
-    }
-
-    return nil
-}
-
 // 代理总管理程序
-func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager, error) {
+func NewProxyManager(cfg config.Config, trafficManager *TrafficManager) (*ProxyManager, error) {
     if trafficManager == nil {
         return nil, fmt.Errorf("traffic manager is nil")
     }
@@ -204,8 +180,8 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
         proxies: make([]*Proxy, 0, len(cfg.Inbounds)),
         trafficManager: trafficManager,
         webConfig: cfg.Web,
-        inbounds: append([]InboundConfig(nil), cfg.Inbounds...),
-        accounts: append([]AccountConfig(nil), cfg.Accounts...),
+        inbounds: append([]config.InboundConfig(nil), cfg.Inbounds...),
+        accounts: append([]config.AccountConfig(nil), cfg.Accounts...),
         dnsResolver:    dnsResolver,
         outboundDialer: outboundDialer,
     }

@@ -6,7 +6,7 @@ import (
     "net/http"
     "time"
 
-//    "wangjui.com/enproxy/proxy/common"
+    "wangjui.com/enproxy/proxy/config"
 )
 
 //var Logger = common.Log
@@ -14,8 +14,8 @@ import (
 type WebServer struct {
     addr     string
     traffic  *TrafficManager
-    inbounds []InboundConfig
-    accounts []AccountConfig
+    inbounds []config.InboundConfig
+    accounts []config.AccountConfig
     server   *http.Server
 }
 
@@ -23,16 +23,16 @@ type InboundLimitInfo struct {
     Tag          string          `json:"tag"`
     Listen       string          `json:"listen"`
     AuthRequired bool            `json:"auth_required"`
-    RateLimit    RateLimitConfig `json:"rate_limit"`
+    RateLimit    config.RateLimitConfig `json:"rate_limit"`
 }
 
 type AccountLimitInfo struct {
     Name      string          `json:"name"`
     Enabled   bool            `json:"enabled"`
-    RateLimit RateLimitConfig `json:"rate_limit"`
+    RateLimit config.RateLimitConfig `json:"rate_limit"`
 }
 
-func NewWebServer(addr string, traffic *TrafficManager, inbounds []InboundConfig, accounts []AccountConfig) *WebServer {
+func NewWebServer(addr string, traffic *TrafficManager, inbounds []config.InboundConfig, accounts []config.AccountConfig) *WebServer {
     return &WebServer{addr: addr, traffic: traffic, inbounds: inbounds, accounts: accounts}
 }
 

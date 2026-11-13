@@ -8,6 +8,8 @@ import (
     "strings"
     "sync"
     "time"
+
+    "wangjui.com/enproxy/proxy/config"
 )
 
 const dnsCleanupInterval = time.Minute
@@ -38,7 +40,7 @@ type DNSResolver struct {
     stopOnce sync.Once
 }
 
-func NewDNSResolver(cfg *DNSConfig) (*DNSResolver, error) {
+func NewDNSResolver(cfg *config.DNSConfig) (*DNSResolver, error) {
     r := &DNSResolver{
         resolver: net.DefaultResolver,
     }

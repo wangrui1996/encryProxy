@@ -6,6 +6,8 @@ import (
     "io"
     "net"
     "time"
+
+    "wangjui.com/enproxy/proxy/config"
 )
 
 const (
@@ -87,7 +89,7 @@ func DecodeAuthResponse(payload []byte) error {
 
 // readAuthFrame：加密模式复用项目现有 AES-GCM CryptoCodec；明文模式使用
 // 4 字节大端长度 + Payload，避免 PlainCodec.Read() 受到 TCP 粘包/拆包影响。
-func readAuthFrame(conn net.Conn, crypto CryptoConfig) ([]byte, error) {
+func readAuthFrame(conn net.Conn, crypto config.CryptoConfig) ([]byte, error) {
     if crypto.Enabled {
         codec, err := NewCodec(true, crypto.Key)
         if err != nil {
@@ -111,7 +113,7 @@ func readAuthFrame(conn net.Conn, crypto CryptoConfig) ([]byte, error) {
     return payload, nil
 }
 
-func writeAuthFrame(conn net.Conn, payload []byte, crypto CryptoConfig) error {
+func writeAuthFrame(conn net.Conn, payload []byte, crypto config.CryptoConfig) error {
     if len(payload) == 0 || len(payload) > maxAuthPayload {
         return fmt.Errorf("invalid authentication payload size: %d", len(payload))
     }
@@ -167,8 +169,8 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 // authenticateOutbound 向上游发送认证请求并验证响应。
 func authenticateOutbound(
     conn net.Conn,
-    account *OutboundAccountConfig,
-    crypto CryptoConfig,
+    account *config.OutboundAccountConfig,
+    crypto config.CryptoConfig,
 ) error {
     if account == nil {
         return nil
