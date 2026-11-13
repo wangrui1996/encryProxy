@@ -38,7 +38,7 @@ func NewWebServer(addr string, traffic *TrafficManager, inbounds []InboundConfig
 
 func (w *WebServer) Run() {
     if err := w.Start(); err != nil && err != http.ErrServerClosed {
-        Logger.Fatalf("web server failed: %v", err)
+        Logger.Errorf("web server failed: %v", err)
     }
 }
 

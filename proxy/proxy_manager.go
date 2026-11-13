@@ -6,6 +6,7 @@ import (
     "strconv"
     "time"
     "strings"
+    "context"
 )
 
 type ProxyManager struct {
@@ -169,11 +170,6 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
         return nil, fmt.Errorf("traffic manager is nil")
     }
 
-    dnsResolver, err := NewDNSResolver(cfg.DNS)
-    if err != nil {
-        return nil, fmt.Errorf("initialize DNS resolver: %w", err)
-    }
-    outboundDialer := NewOutboundDialer(dnsResolver)
     if err := ValidateInbounds(cfg.Inbounds); err != nil {
         return nil, err
     }
@@ -194,6 +190,16 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
     if err != nil {
         return nil, err
     }
+
+    if cfg.Web.Enabled && cfg.Web.Listen == "" {
+        return nil, fmt.Errorf("web.listen is empty while web.enabled is true")
+    }
+
+    dnsResolver, err := NewDNSResolver(cfg.DNS)
+    if err != nil {
+        return nil, fmt.Errorf("initialize DNS resolver: %w", err)
+    }
+    outboundDialer := NewOutboundDialer(dnsResolver)
     manager := &ProxyManager{
         proxies: make([]*Proxy, 0, len(cfg.Inbounds)),
         trafficManager: trafficManager,
@@ -205,9 +211,6 @@ func NewProxyManager(cfg Config, trafficManager *TrafficManager) (*ProxyManager,
     }
     for _, in := range cfg.Inbounds {
         manager.proxies = append(manager.proxies, NewProxy(in, accounts, routes, trafficManager, outboundDialer))
-    }
-    if cfg.Web.Enabled && cfg.Web.Listen == "" {
-        return nil, fmt.Errorf("web.listen is empty while web.enabled is true")
     }
     return manager, nil
 }
@@ -222,4 +225,27 @@ func (manager *ProxyManager) Start() {
         go manager.webServer.Run()
     }
 }
+
+func (manager *ProxyManager) Close() {
+    if manager == nil {
+        return
+    }
+
+    if manager.dnsResolver != nil {
+        manager.dnsResolver.Close()
+    }
+
+    if manager.webServer != nil {
+        ctx, cancel := context.WithTimeout(
+            context.Background(),
+            5*time.Second,
+        )
+        defer cancel()
+
+        if err := manager.webServer.Shutdown(ctx); err != nil {
+            Logger.Errorf("shutdown web server failed: %v", err)
+        }
+    }
+}
+
 func (manager *ProxyManager) Count() int { return len(manager.proxies) }

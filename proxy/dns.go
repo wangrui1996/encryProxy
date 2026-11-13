@@ -10,6 +10,8 @@ import (
     "time"
 )
 
+const dnsCleanupInterval = time.Minute
+
 type dnsEntry struct {
     ips       []net.IPAddr
     expiresAt time.Time
@@ -31,6 +33,9 @@ type DNSResolver struct {
     mu       sync.Mutex
     cache    map[string]dnsEntry
     inflight map[string]*dnsCall
+
+    stopCh   chan struct{}
+    stopOnce sync.Once
 }
 
 func NewDNSResolver(cfg *DNSConfig) (*DNSResolver, error) {
@@ -55,8 +60,56 @@ func NewDNSResolver(cfg *DNSConfig) (*DNSResolver, error) {
     r.ttl = ttl
     r.cache = make(map[string]dnsEntry)
     r.inflight = make(map[string]*dnsCall)
+    r.stopCh = make(chan struct{})
+
+    // 启动过期缓存自动清理。
+    go r.cleanupLoop()
 
     return r, nil
+}
+
+// cleanupLoop 定期清理过期 DNS 缓存。
+func (r *DNSResolver) cleanupLoop() {
+    ticker := time.NewTicker(dnsCleanupInterval)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ticker.C:
+            r.cleanupExpired()
+        case <-r.stopCh:
+            return
+        }
+    }
+}
+
+// cleanupExpired 删除所有已经过期的 DNS 缓存。
+func (r *DNSResolver) cleanupExpired() {
+    if r == nil {
+        return
+    }
+
+    now := time.Now()
+
+    r.mu.Lock()
+    defer r.mu.Unlock()
+
+    for host, entry := range r.cache {
+        if !now.Before(entry.expiresAt) {
+            delete(r.cache, host)
+        }
+    }
+}
+
+// Close 停止 DNS 缓存清理协程并释放缓存。
+func (r *DNSResolver) Close() {
+    if r == nil || r.stopCh == nil {
+        return
+    }
+
+    r.stopOnce.Do(func() {
+        close(r.stopCh)
+    })
 }
 
 func cloneIPAddrs(ips []net.IPAddr) []net.IPAddr {
@@ -133,7 +186,7 @@ func (r *DNSResolver) Lookup(ctx context.Context,host string) ([]net.IPAddr, err
     r.mu.Unlock()
 
     // DNS 查询有独立的超时时间。
-    lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
     ips, err := r.lookupDNS(lookupCtx, key)
     cancel()
