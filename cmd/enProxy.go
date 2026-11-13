@@ -5,13 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
 	"wangjui.com/enproxy/proxy"
 	"wangjui.com/enproxy/proxy/common"
-
 	"wangjui.com/enproxy/proxy/config"
 )
-
 
 
 func readConfig(cfg *config.Config) error {

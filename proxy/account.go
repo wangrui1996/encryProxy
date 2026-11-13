@@ -33,16 +33,6 @@ func NewAccountManager(configs []config.AccountConfig) (*AccountManager, error) 
     }
 
     for _, cfg := range configs {
-        if cfg.Name == "" {
-            return nil, fmt.Errorf("account name is empty")
-        }
-        if cfg.Password == "" {
-            return nil, fmt.Errorf("account %q password is empty", cfg.Name)
-        }
-        if _, exists := manager.accounts[cfg.Name]; exists {
-            return nil, fmt.Errorf("duplicate account name: %s", cfg.Name)
-        }
-
         manager.accounts[cfg.Name] = &accountEntry{
             password: cfg.Password,
             enabled:  cfg.Enabled,

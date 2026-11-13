@@ -9,8 +9,6 @@ import (
     "wangjui.com/enproxy/proxy/config"
 )
 
-//var Logger = common.Log
-
 type WebServer struct {
     addr     string
     traffic  *TrafficManager
