@@ -8,6 +8,7 @@ import (
 	"wangjui.com/enproxy/proxy"
 	"wangjui.com/enproxy/proxy/common"
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/stat"
 )
 
 
@@ -51,7 +52,7 @@ func main() {
 	}
 
 	// 创建流量统计管理器。
-	trafficManager := proxy.NewTrafficManager()
+	trafficManager := stat.NewManager()
 
 	// 创建代理管理器。
 	proxyManager, err := proxy.NewProxyManager(cfg, trafficManager)

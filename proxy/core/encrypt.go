@@ -1,5 +1,4 @@
-
-package proxy
+package core
 
 import (
     "crypto/aes"

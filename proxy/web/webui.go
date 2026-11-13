@@ -1,4 +1,4 @@
-package proxy
+package web
 
 const webUI = `<!DOCTYPE html>
 <html lang="zh-CN"><head>

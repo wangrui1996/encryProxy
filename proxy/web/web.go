@@ -1,4 +1,4 @@
-package proxy
+package web
 
 import (
     "context"
@@ -7,11 +7,15 @@ import (
     "time"
 
     "wangjui.com/enproxy/proxy/config"
+    "wangjui.com/enproxy/proxy/stat"
+    "wangjui.com/enproxy/proxy/common"
 )
+
+var Logger = common.Log
 
 type WebServer struct {
     addr     string
-    traffic  *TrafficManager
+    traffic  *stat.Manager
     inbounds []config.InboundConfig
     accounts []config.AccountConfig
     server   *http.Server
@@ -30,7 +34,7 @@ type AccountLimitInfo struct {
     RateLimit config.RateLimitConfig `json:"rate_limit"`
 }
 
-func NewWebServer(addr string, traffic *TrafficManager, inbounds []config.InboundConfig, accounts []config.AccountConfig) *WebServer {
+func NewWebServer(addr string, traffic *stat.Manager, inbounds []config.InboundConfig, accounts []config.AccountConfig) *WebServer {
     return &WebServer{addr: addr, traffic: traffic, inbounds: inbounds, accounts: accounts}
 }
 

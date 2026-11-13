@@ -1,104 +1,182 @@
 package proxy
 
 import (
-    "fmt"
-    "time"
-    "context"
+	"context"
+	"fmt"
+	"time"
 
-    "wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
+	"wangjui.com/enproxy/proxy/dns"
+	"wangjui.com/enproxy/proxy/route"
+	"wangjui.com/enproxy/proxy/stat"
+	"wangjui.com/enproxy/proxy/web"
 )
 
 type ProxyManager struct {
-    proxies        []*Proxy
-    trafficManager *TrafficManager
-    webConfig      config.WebConfig
-    webServer      *WebServer
-    inbounds       []config.InboundConfig
-    accounts       []config.AccountConfig
-    dnsResolver    *DNSResolver
-    outboundDialer *OutboundDialer
+	proxies []*core.Proxy
+
+	accountManager *AccountManager
+	routeManager   *route.Manager
+	trafficManager *stat.Manager
+	dnsResolver    *dns.Resolver
+
+	webConfig config.WebConfig
+	webServer *web.WebServer
+
+	inbounds []config.InboundConfig
+	accounts []config.AccountConfig
 }
 
+// NewProxyManager 创建并组装所有运行时 Manager。
+func NewProxyManager(
+	cfg config.Config,
+	trafficManager *stat.Manager,
+) (*ProxyManager, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf(
+			"invalid configuration: %w",
+			err,
+		)
+	}
 
-// 代理总管理程序
-func NewProxyManager(cfg config.Config, trafficManager *TrafficManager) (*ProxyManager, error) {
-    if trafficManager == nil {
-        return nil, fmt.Errorf("traffic manager is nil")
-    }
+	if trafficManager == nil {
+		return nil, fmt.Errorf("traffic manager is nil")
+	}
 
-    if err := cfg.Validate(); err != nil {
-        return nil, fmt.Errorf("invalid configuration: %w", err)
-    }
+	// 1. 创建账号管理器。
+	accountManager, err := NewAccountManager(cfg.Accounts)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"initialize account manager: %w",
+			err,
+		)
+	}
 
-    accounts, err := NewAccountManager(cfg.Accounts)
-    if err != nil {
-        return nil, err
-    }
-    for _, inbound := range cfg.Inbounds {
-        if inbound.AuthRequired && accounts.Count() == 0 {
-            return nil, fmt.Errorf("inbound %q requires authentication but no accounts are configured", inbound.Tag)
-        }
-    }
-    routes, err := NewRouteManager(cfg.Route, cfg.Inbounds, cfg.Outbounds)
-    if err != nil {
-        return nil, err
-    }
+	// 2. 创建路由管理器。
+	routeManager, err := route.NewManager(
+		cfg.Route,
+		cfg.Inbounds,
+		cfg.Outbounds,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"initialize route manager: %w",
+			err,
+		)
+	}
 
-    if cfg.Web.Enabled && cfg.Web.Listen == "" {
-        return nil, fmt.Errorf("web.listen is empty while web.enabled is true")
-    }
+	// 3. 创建 DNS Resolver。
+	dnsResolver, err := dns.NewResolver(cfg.DNS)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"initialize DNS resolver: %w",
+			err,
+		)
+	}
 
-    dnsResolver, err := NewDNSResolver(cfg.DNS)
-    if err != nil {
-        return nil, fmt.Errorf("initialize DNS resolver: %w", err)
-    }
-    outboundDialer := NewOutboundDialer(dnsResolver)
-    manager := &ProxyManager{
-        proxies: make([]*Proxy, 0, len(cfg.Inbounds)),
-        trafficManager: trafficManager,
-        webConfig: cfg.Web,
-        inbounds: append([]config.InboundConfig(nil), cfg.Inbounds...),
-        accounts: append([]config.AccountConfig(nil), cfg.Accounts...),
-        dnsResolver:    dnsResolver,
-        outboundDialer: outboundDialer,
-    }
-    for _, in := range cfg.Inbounds {
-        manager.proxies = append(manager.proxies, NewProxy(in, accounts, routes, trafficManager, outboundDialer))
-    }
-    return manager, nil
+	// 4. 创建 core 所需的上游拨号器。
+	outboundDialer := core.NewOutboundDialer(dnsResolver)
+
+	manager := &ProxyManager{
+		proxies:        make([]*core.Proxy, 0, len(cfg.Inbounds)),
+		accountManager: accountManager,
+		routeManager:   routeManager,
+		trafficManager: trafficManager,
+		dnsResolver:    dnsResolver,
+		webConfig:      cfg.Web,
+		inbounds:       append([]config.InboundConfig(nil), cfg.Inbounds...),
+		accounts:       append([]config.AccountConfig(nil), cfg.Accounts...),
+	}
+
+	// 5. 组装 core.Proxy。
+	deps := core.Dependencies{
+		Authenticator: accountManager,
+		RouteResolver: routeManager,
+		Dialer:        outboundDialer,
+		Traffic:       trafficManager,
+	}
+
+	for _, inbound := range cfg.Inbounds {
+		proxyInstance, err := core.NewProxy(inbound, deps)
+		if err != nil {
+			dnsResolver.Close()
+			return nil, fmt.Errorf(
+				"initialize inbound %q: %w",
+				inbound.Tag,
+				err,
+			)
+		}
+
+		manager.proxies = append(
+			manager.proxies,
+			proxyInstance,
+		)
+	}
+
+	return manager, nil
 }
 
+// Start 启动统计、所有入站代理以及 Web 服务。
 func (manager *ProxyManager) Start() {
-    for _, p := range manager.proxies {
-        proxy := p
-        go proxy.Run()
-    }
-    if manager.webConfig.Enabled {
-        manager.webServer = NewWebServer(manager.webConfig.Listen, manager.trafficManager, manager.inbounds, manager.accounts)
-        go manager.webServer.Run()
-    }
+	if manager == nil {
+		return
+	}
+
+	if manager.trafficManager != nil {
+		manager.trafficManager.Start()
+	}
+
+	for _, p := range manager.proxies {
+		proxyInstance := p
+		go proxyInstance.Run()
+	}
+
+	if manager.webConfig.Enabled {
+		manager.webServer = web.NewWebServer(
+			manager.webConfig.Listen,
+			manager.trafficManager,
+			manager.inbounds,
+			manager.accounts,
+		)
+
+		go manager.webServer.Run()
+	}
 }
 
+// Close 释放由 ProxyManager 创建和管理的资源。
 func (manager *ProxyManager) Close() {
-    if manager == nil {
-        return
-    }
+	if manager == nil {
+		return
+	}
 
-    if manager.dnsResolver != nil {
-        manager.dnsResolver.Close()
-    }
+	if manager.webServer != nil {
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			5*time.Second,
+		)
+		defer cancel()
 
-    if manager.webServer != nil {
-        ctx, cancel := context.WithTimeout(
-            context.Background(),
-            5*time.Second,
-        )
-        defer cancel()
+		if err := manager.webServer.Shutdown(ctx); err != nil {
+			Logger.Errorf(
+				"shutdown web server failed: %v",
+				err,
+			)
+		}
+	}
 
-        if err := manager.webServer.Shutdown(ctx); err != nil {
-            Logger.Errorf("shutdown web server failed: %v", err)
-        }
-    }
+	if manager.dnsResolver != nil {
+		manager.dnsResolver.Close()
+	}
+
+	if manager.trafficManager != nil {
+		manager.trafficManager.Close()
+	}
 }
 
-func (manager *ProxyManager) Count() int { return len(manager.proxies) }
+func (manager *ProxyManager) Count() int {
+	if manager == nil {
+		return 0
+	}
+	return len(manager.proxies)
+}
