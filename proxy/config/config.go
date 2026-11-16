@@ -1,140 +1,173 @@
 package config
 
 import (
-    "fmt"
+	"fmt"
 )
 
 // Config 是 enproxy 的完整运行配置。
 type Config struct {
-    Inbounds  []InboundConfig  `json:"inbounds"`
-    DNS      *DNSConfig      `json:"dns,omitempty"`
-    Web       WebConfig        `json:"web"`
-    Outbounds []OutboundConfig `json:"outbounds"`
-    Accounts  []AccountConfig  `json:"accounts"`
-    Route     RouteConfig      `json:"route"`
+	Log       LogConfig        `json:"log"`
+	Inbounds  []InboundConfig  `json:"inbounds"`
+	DNS       *DNSConfig       `json:"dns,omitempty"`
+	Web       WebConfig        `json:"web"`
+	Outbounds []OutboundConfig `json:"outbounds"`
+	Accounts  []AccountConfig  `json:"accounts"`
+	Route     []RouteConfig    `json:"route"`
+}
+
+type LogConfig struct {
+	Level  string `json:"level"`
+	Path   string `json:"path"`
+	Access string `json:"access"`
 }
 
 type DNSConfig struct {
-    CacheTTL string `json:"cache_ttl"`
+	CacheTTL string `json:"cache_ttl"`
 }
 
 type WebConfig struct {
-    Enabled bool   `json:"enabled"`
-    Listen  string `json:"listen"`
+	Enabled bool   `json:"enabled"`
+	Listen  string `json:"listen"`
+	Passwd  string `json:"passwd"`
 }
 
 func (cfg *Config) Validate() error {
-    if cfg == nil {
-        return fmt.Errorf("config is nil")
-    }
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
 
-    if len(cfg.Inbounds) == 0 {
-        return fmt.Errorf("no inbound configured")
-    }
+	if len(cfg.Inbounds) == 0 {
+		return fmt.Errorf("no inbound configured")
+	}
 
-    if len(cfg.Outbounds) == 0 {
-        return fmt.Errorf("no outbound configured")
-    }
+	if err := cfg.Log.Validate(); err != nil {
+		return fmt.Errorf("log: %w", err)
+	}
 
-    // DNS
-    if err := cfg.DNS.Validate(); err != nil {
-        return fmt.Errorf("dns: %w", err)
-    }
+	// DNS
+	if err := cfg.DNS.Validate(); err != nil {
+		return fmt.Errorf("dns: %w", err)
+	}
 
-    // Web
-    if err := cfg.Web.Validate(); err != nil {
-        return fmt.Errorf("web: %w", err)
-    }
+	// Web
+	if err := cfg.Web.Validate(); err != nil {
+		return fmt.Errorf("web: %w", err)
+	}
 
-    // Inbounds
-    if err := validateInboundList(cfg.Inbounds); err != nil {
-        return err
-    }
+	// Inbounds
+	if err := validateInboundList(cfg.Inbounds); err != nil {
+		return err
+	}
 
-    // Outbounds
-    if err := validateOutboundList(cfg.Outbounds); err != nil {
-        return err
-    }
+	// Outbounds
+	if err := validateOutboundList(cfg.Outbounds); err != nil {
+		return err
+	}
 
-    // Accounts
-    if err := validateAccountList(cfg.Accounts); err != nil {
-        return err
-    }
+	// Accounts
+	if err := validateAccountList(cfg.Accounts); err != nil {
+		return err
+	}
 
-    // Route
-    if err := cfg.Route.Validate(); err != nil {
-        return fmt.Errorf("route: %w", err)
-    }
+	// Route
+	if len(cfg.Route) == 0 {
+		return fmt.Errorf("no route configured")
+	}
+	for i := range cfg.Route {
+		if err := cfg.Route[i].Validate(); err != nil {
+			return fmt.Errorf("route[%d]: %w", i, err)
+		}
+	}
 
-    // 跨配置引用校验
-    if err := cfg.validateReferences(); err != nil {
-        return err
-    }
+	// 跨配置引用校验
+	if err := cfg.validateReferences(); err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 // 校验配置之间的引用关系。
 func (cfg *Config) validateReferences() error {
-    inboundTags := make(map[string]struct{}, len(cfg.Inbounds))
-    outboundTags := make(map[string]struct{}, len(cfg.Outbounds))
+	inboundTags := make(map[string]*InboundConfig, len(cfg.Inbounds))
+	outboundTags, err := BuildOutboundMap(cfg.Outbounds)
+	if err != nil {
+		return err
+	}
 
-    for i := range cfg.Inbounds {
-        inboundTags[cfg.Inbounds[i].Tag] = struct{}{}
-    }
+	for i := range cfg.Inbounds {
+		inboundTags[cfg.Inbounds[i].Tag] = &cfg.Inbounds[i]
+	}
 
-    for i := range cfg.Outbounds {
-        outboundTags[cfg.Outbounds[i].Tag] = struct{}{}
-    }
+	routed := make(map[string]bool, len(cfg.Inbounds))
+	for i := range cfg.Route {
+		route := &cfg.Route[i]
+		for _, tag := range route.Inbound {
+			inbound, exists := inboundTags[tag]
+			if !exists {
+				return fmt.Errorf("route[%d] references unknown inbound %q", i, tag)
+			}
+			if routed[tag] {
+				return fmt.Errorf("inbound %q appears in more than one route", tag)
+			}
+			routed[tag] = true
+			if (route.Type == "relay") != (inbound.Protocol == "tcp") {
+				return fmt.Errorf("route[%d] type %q does not match inbound %q protocol %q",
+					i, route.Type, tag, inbound.Protocol)
+			}
+		}
 
-    // Default 必须引用已定义的 Outbound。
-    if _, exists := outboundTags[cfg.Route.Default]; !exists {
-        return fmt.Errorf(
-            "route default references unknown outbound %q",
-            cfg.Route.Default,
-        )
-    }
+		var targets []string
+		if route.Type == "relay" {
+			targets = append(targets, route.Relay.Outbound)
+		} else {
+			targets = append(targets, route.Proxy.DefaultOutbound)
+			for _, policy := range route.Proxy.Policies {
+				targets = append(targets, policy.Outbound)
+			}
+		}
+		for _, tag := range targets {
+			outbound, exists := outboundTags[tag]
+			if !exists {
+				return fmt.Errorf("route[%d] references unknown outbound %q", i, tag)
+			}
+			// Relay 没有动态目标地址；TCP 出站也不传递代理目标地址。
+			if route.Type == "relay" && outbound.Protocol != "tcp" {
+				return fmt.Errorf("relay route[%d] requires tcp outbound %q", i, tag)
+			}
+			if route.Type == "proxy" {
+				if tag == route.Proxy.DefaultOutbound && outbound.Protocol != "freedom" && outbound.Protocol != "blackhole" {
+					return fmt.Errorf("proxy route[%d]: default outbound %q must be freedom or blackhole", i, tag)
+				}
+				switch outbound.Protocol {
+				case "freedom", "blackhole", "http", "shadowsocks":
+					// 支持直连、静默丢弃、HTTP 和 Shadowsocks 上游。
+				default:
+					return fmt.Errorf("proxy route[%d]: outbound %q protocol %q is not implemented for proxy routing", i, tag, outbound.Protocol)
+				}
+			}
+		}
+	}
 
-    // Route Rules 引用检查。
-    for i := range cfg.Route.Rules {
-        rule := &cfg.Route.Rules[i]
+	hasCryptoAccount := false
+	hasProxyAccount := false
+	for i := range cfg.Accounts {
+		hasCryptoAccount = hasCryptoAccount || cfg.Accounts[i].CryptoEnable
+		hasProxyAccount = hasProxyAccount || cfg.Accounts[i].ProxyEnable
+	}
 
-        if _, exists := outboundTags[rule.Outbound]; !exists {
-            return fmt.Errorf(
-                "route.rules[%d] references unknown outbound %q",
-                i,
-                rule.Outbound,
-            )
-        }
+	for i := range cfg.Inbounds {
+		inbound := &cfg.Inbounds[i]
+		if !routed[inbound.Tag] {
+			return fmt.Errorf("inbound %q has no route", inbound.Tag)
+		}
+		if inbound.Crypto != nil && inbound.Crypto.AuthRequired && !hasCryptoAccount {
+			return fmt.Errorf("inbound %q requires a crypto-enabled account", inbound.Tag)
+		}
+		if inbound.HTTP != nil && inbound.HTTP.AuthRequired && !hasProxyAccount {
+			return fmt.Errorf("inbound %q requires a proxy-enabled account", inbound.Tag)
+		}
+	}
 
-        for _, tag := range rule.Inbound {
-            if _, exists := inboundTags[tag]; !exists {
-                return fmt.Errorf(
-                    "route.rules[%d] references unknown inbound %q",
-                    i,
-                    tag,
-                )
-            }
-        }
-    }
-
-    // 开启认证的 Inbound 必须有可用账号。
-    hasEnabledAccount := false
-    for i := range cfg.Accounts {
-        if cfg.Accounts[i].Enabled {
-            hasEnabledAccount = true
-            break
-        }
-    }
-
-    for i := range cfg.Inbounds {
-        if cfg.Inbounds[i].AuthRequired && !hasEnabledAccount {
-            return fmt.Errorf(
-                "inbound %q requires authentication, but no enabled account is configured",
-                cfg.Inbounds[i].Tag,
-            )
-        }
-    }
-
-    return nil
+	return nil
 }

@@ -5,11 +5,13 @@ import (
 )
 
 type InboundConfig struct {
-    Tag          string          `json:"tag"`
-    Listen       string          `json:"listen"`
-    AuthRequired bool            `json:"auth_required"`
-    Crypto       CryptoConfig    `json:"crypto"`
-    RateLimit    RateLimitConfig `json:"rate_limit"`
+    Tag         string             `json:"tag"`
+    Listen      string             `json:"listen"`
+    Protocol    string             `json:"protocol"`
+    Crypto      *CryptoConfig      `json:"crypto,omitempty"`
+    HTTP        *HTTPConfig        `json:"http,omitempty"`
+    Shadowsocks *ShadowsocksConfig `json:"shadowsocks,omitempty"`
+    RateLimit   RateLimitConfig    `json:"rate_limit"`
 }
 
 func (c *InboundConfig) Validate() error {
@@ -23,6 +25,14 @@ func (c *InboundConfig) Validate() error {
 
     if err := validateListenAddr(c.Listen); err != nil {
         return fmt.Errorf("invalid listen address %q: %w", c.Listen, err)
+    }
+
+    if err := validateProtocol(c.Protocol, c.HTTP, c.Shadowsocks, false); err != nil {
+        return err
+    }
+
+    if c.Crypto != nil && (c.Crypto.Account != "" || c.Crypto.Passwd != "") {
+        return fmt.Errorf("inbound crypto credentials must be configured in accounts")
     }
 
     if err := c.Crypto.Validate(); err != nil {

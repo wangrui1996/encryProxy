@@ -1,20 +1,25 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+
 	"wangjui.com/enproxy/proxy"
 	"wangjui.com/enproxy/proxy/common"
 	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/stat"
 )
 
-
 func readConfig(cfg *config.Config) error {
-	configFileName := "config.json"
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
 
+	configFileName := "config.json"
 	if len(os.Args) > 1 {
 		configFileName = os.Args[1]
 	}
@@ -26,48 +31,72 @@ func readConfig(cfg *config.Config) error {
 
 	common.Log.Infof("Loading config: %s", absPath)
 
-	configFile, err := os.Open(absPath)
+	loadedConfig, err := config.Load(absPath)
 	if err != nil {
-		return fmt.Errorf("open config file failed: %w", err)
-	}
-	defer configFile.Close()
-
-	jsonParser := json.NewDecoder(configFile)
-
-	if err := jsonParser.Decode(cfg); err != nil {
-		return fmt.Errorf("decode config failed: %w", err)
+		return err
 	}
 
+	*cfg = *loadedConfig
 	return nil
 }
 
 func main() {
-	// 初始化日志。
+	// 保留现有日志初始化方式。
 	common.InitLogger("enproxy", "debug")
 
-	// 加载配置。
+	// 加载配置文件。
 	var cfg config.Config
 	if err := readConfig(&cfg); err != nil {
 		common.Log.Fatalf("load config failed: %v", err)
 	}
 
+	// Outbounds 只包含自定义出站。
+	// freedom、blackhole 由路由管理器自动注册，无需在此添加。
+	common.Log.Infof(
+		"config loaded: %d inbounds, %d custom outbounds, %d accounts, %d routes; builtin outbounds: freedom, blackhole",
+		len(cfg.Inbounds),
+		len(cfg.Outbounds),
+		len(cfg.Accounts),
+		len(cfg.Route),
+	)
+
 	// 创建流量统计管理器。
 	trafficManager := stat.NewManager()
 
 	// 创建代理管理器。
-	proxyManager, err := proxy.NewProxyManager(cfg, trafficManager)
+	proxyManager, err := proxy.NewProxyManager(
+		cfg,
+		trafficManager,
+	)
 	if err != nil {
-		common.Log.Fatalf("create proxy manager failed: %v", err)
+		trafficManager.Close()
+		common.Log.Fatalf(
+			"initialize proxy manager failed: %v",
+			err,
+		)
 	}
+	defer proxyManager.Close()
 
-	// 启动流量统计。
-	go trafficManager.Start()
+	// 监听退出信号。
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
-	// 启动所有代理入口，以及配置中启用的 Web Dashboard。
+	// 启动所有代理服务。
 	proxyManager.Start()
 
-	common.Log.Infof("started %d proxy instances", proxyManager.Count())
+	common.Log.Infof(
+		"enproxy startup initiated: %d inbounds",
+		proxyManager.Count(),
+	)
 
-	// 阻塞主线程，防止程序退出。
-	select {}
+	// 阻塞主线程，等待退出信号。
+	<-ctx.Done()
+
+	common.Log.Info(
+		"shutdown signal received, stopping enproxy",
+	)
 }

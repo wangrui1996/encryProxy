@@ -108,14 +108,21 @@ func DecodeAuthResponse(payload []byte) error {
 // 加密模式：复用项目现有 AES-GCM CryptoCodec。
 func readAuthFrame(
 	conn net.Conn,
-	crypto config.CryptoConfig,
+	crypto *config.CryptoConfig,
 ) ([]byte, error) {
-	if crypto.Enabled {
+	if crypto != nil {
 		codec, err := NewCodec(true, crypto.Key)
 		if err != nil {
 			return nil, err
 		}
-		return codec.Decode(conn, nil)
+		payload, err := codec.Decode(conn, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(payload) == 0 || len(payload) > maxAuthPayload {
+			return nil, fmt.Errorf("invalid authentication payload size: %d", len(payload))
+		}
+		return payload, nil
 	}
 
 	var header [4]byte
@@ -145,7 +152,7 @@ func readAuthFrame(
 func writeAuthFrame(
 	conn net.Conn,
 	payload []byte,
-	crypto config.CryptoConfig,
+	crypto *config.CryptoConfig,
 ) error {
 	if len(payload) == 0 || len(payload) > maxAuthPayload {
 		return fmt.Errorf(
@@ -154,7 +161,7 @@ func writeAuthFrame(
 		)
 	}
 
-	if crypto.Enabled {
+	if crypto != nil {
 		codec, err := NewCodec(true, crypto.Key)
 		if err != nil {
 			return err
@@ -203,7 +210,7 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 		return nil, err
 	}
 
-	account, authErr := p.authenticator.Authenticate(
+	account, authErr := p.authenticator.AuthenticateCrypto(
 		request.Username,
 		request.Password,
 	)
@@ -242,10 +249,9 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 // authenticateOutbound 向上游发送认证请求并验证响应。
 func authenticateOutbound(
 	conn net.Conn,
-	account *config.OutboundAccountConfig,
-	crypto config.CryptoConfig,
+	crypto *config.CryptoConfig,
 ) error {
-	if account == nil {
+	if crypto == nil || !crypto.AuthRequired {
 		return nil
 	}
 
@@ -258,8 +264,8 @@ func authenticateOutbound(
 	defer conn.SetDeadline(time.Time{})
 
 	payload, err := EncodeAuthRequest(
-		account.Username,
-		account.Password,
+		crypto.Account,
+		crypto.Passwd,
 	)
 	if err != nil {
 		return fmt.Errorf("encode authentication request: %w", err)

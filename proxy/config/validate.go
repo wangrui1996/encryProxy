@@ -100,3 +100,17 @@ func validatePort(port string) error {
 
     return nil
 }
+
+// Log 配置校验。空 level 由日志初始化层按默认等级处理。
+func (c *LogConfig) Validate() error {
+    if c == nil {
+        return fmt.Errorf("log config is nil")
+    }
+
+    switch c.Level {
+    case "", "panic", "fatal", "error", "warn", "warning", "info", "debug", "trace":
+        return nil
+    default:
+        return fmt.Errorf("unsupported log level %q", c.Level)
+    }
+}

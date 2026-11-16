@@ -165,6 +165,11 @@ func (manager *ProxyManager) Close() {
 		}
 	}
 
+	// 先停止监听与连接，再关闭它们依赖的 DNS 和统计资源。
+	for _, p := range manager.proxies {
+		p.Close()
+	}
+
 	if manager.dnsResolver != nil {
 		manager.dnsResolver.Close()
 	}

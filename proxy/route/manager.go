@@ -1,122 +1,121 @@
-
 package route
 
 import (
 	"fmt"
+	"strings"
 
 	"wangjui.com/enproxy/proxy/config"
 )
 
-// Manager 根据 Inbound Tag 选择 Outbound。
+type routeEntry struct {
+	kind  string
+	relay *config.OutboundConfig
+	proxy *config.ProxyRuleConfig
+}
+
+// Manager 只负责选择出站；连接建立和协议握手由 protocol 负责。
 type Manager struct {
-	defaultOutbound *config.OutboundConfig
-	rules           map[string]*config.OutboundConfig
+	entries   map[string]routeEntry
+	outbounds map[string]*config.OutboundConfig
 }
 
-func NewManager(
-	cfg config.RouteConfig,
-	inbounds []config.InboundConfig,
-	outbounds []config.OutboundConfig,
-) (*Manager, error) {
-	outboundMap := make(map[string]*config.OutboundConfig, len(outbounds))
-
-	for i := range outbounds {
-		outbound := outbounds[i]
-
-		if outbound.Tag == "" {
-			return nil, fmt.Errorf("outbound tag is empty")
+func NewManager(routes []config.RouteConfig, inbounds []config.InboundConfig, outbounds []config.OutboundConfig) (*Manager, error) {
+	inboundMap := make(map[string]config.InboundConfig, len(inbounds))
+	for _, in := range inbounds {
+		if _, exists := inboundMap[in.Tag]; exists {
+			return nil, fmt.Errorf("duplicate inbound %q", in.Tag)
 		}
-
-		if _, exists := outboundMap[outbound.Tag]; exists {
-			return nil, fmt.Errorf("duplicate outbound tag: %s", outbound.Tag)
-		}
-
-		outboundMap[outbound.Tag] = &outbound
+		inboundMap[in.Tag] = in
 	}
-
-	manager := &Manager{
-		rules: make(map[string]*config.OutboundConfig),
+	outboundMap, err := config.BuildOutboundMap(outbounds)
+	if err != nil {
+		return nil, err
 	}
-
-	if cfg.Default != "" {
-		outbound, exists := outboundMap[cfg.Default]
-		if !exists {
-			return nil, fmt.Errorf("route default outbound %q does not exist", cfg.Default)
+	m := &Manager{entries: make(map[string]routeEntry, len(inbounds)), outbounds: outboundMap}
+	for i := range routes {
+		route := &routes[i]
+		if err := route.Validate(); err != nil {
+			return nil, fmt.Errorf("route[%d]: %w", i, err)
 		}
-
-		manager.defaultOutbound = outbound
-	}
-
-	inboundTags := make(map[string]struct{}, len(inbounds))
-
-	for _, inbound := range inbounds {
-		inboundTags[inbound.Tag] = struct{}{}
-	}
-
-	for i, rule := range cfg.Rules {
-		if rule.Outbound == "" {
-			return nil, fmt.Errorf("route rule %d outbound is empty", i)
-		}
-
-		outbound, exists := outboundMap[rule.Outbound]
-		if !exists {
-			return nil, fmt.Errorf(
-				"route rule %d references unknown outbound %q",
-				i,
-				rule.Outbound,
-			)
-		}
-
-		if len(rule.Inbound) == 0 {
-			return nil, fmt.Errorf("route rule %d has no inbound tags", i)
-		}
-
-		for _, tag := range rule.Inbound {
-			if _, exists := inboundTags[tag]; !exists {
-				return nil, fmt.Errorf(
-					"route rule %d references unknown inbound %q",
-					i,
-					tag,
-				)
+		entry := routeEntry{kind: route.Type}
+		switch route.Type {
+		case "relay":
+			out := m.outbounds[route.Relay.Outbound]
+			if out == nil || out.Protocol != "tcp" {
+				return nil, fmt.Errorf("route[%d]: relay needs tcp outbound %q", i, route.Relay.Outbound)
 			}
-
-			if _, exists := manager.rules[tag]; exists {
-				return nil, fmt.Errorf(
-					"inbound %q appears in more than one route rule",
-					tag,
-				)
+			entry.relay = out
+		case "proxy":
+			entry.proxy = route.Proxy
+			defaultOutbound := m.outbounds[route.Proxy.DefaultOutbound]
+			if defaultOutbound == nil || (defaultOutbound.Protocol != "freedom" && defaultOutbound.Protocol != "blackhole") {
+				return nil, fmt.Errorf("route[%d]: proxy default outbound %q must be freedom or blackhole", i, route.Proxy.DefaultOutbound)
 			}
-
-			manager.rules[tag] = outbound
+			for _, rule := range route.Proxy.Policies {
+				out := m.outbounds[rule.Outbound]
+				if out == nil {
+					return nil, fmt.Errorf("route[%d]: unknown policy outbound %q", i, rule.Outbound)
+				}
+				switch out.Protocol {
+				case "freedom", "blackhole", "http", "shadowsocks":
+				default:
+					return nil, fmt.Errorf("route[%d]: proxy outbound %q protocol %q unsupported", i, out.Tag, out.Protocol)
+				}
+			}
+		default:
+			return nil, fmt.Errorf("route[%d]: unsupported route type %q", i, route.Type)
+		}
+		for _, tag := range route.Inbound {
+			in, ok := inboundMap[tag]
+			if !ok {
+				return nil, fmt.Errorf("route[%d]: unknown inbound %q", i, tag)
+			}
+			if _, exists := m.entries[tag]; exists {
+				return nil, fmt.Errorf("duplicate route for inbound %q", tag)
+			}
+			if (route.Type == "relay") != (in.Protocol == "tcp") {
+				return nil, fmt.Errorf("route[%d]: incompatible inbound %s protocol %q", i, tag, in.Protocol)
+			}
+			m.entries[tag] = entry
 		}
 	}
-
-	for _, inbound := range inbounds {
-		if _, exists := manager.rules[inbound.Tag]; !exists &&
-			manager.defaultOutbound == nil {
-			return nil, fmt.Errorf(
-				"inbound %q has no route and route.default is empty",
-				inbound.Tag,
-			)
+	for _, in := range inbounds {
+		if _, ok := m.entries[in.Tag]; !ok {
+			return nil, fmt.Errorf("inbound %q has no route", in.Tag)
 		}
 	}
-
-	return manager, nil
+	return m, nil
 }
 
-// Resolve 根据 Inbound Tag 获取对应的 Outbound。
-func (m *Manager) Resolve(inboundTag string) (*config.OutboundConfig, error) {
+func (m *Manager) ResolveRelay(inboundTag string) (*config.OutboundConfig, error) {
 	if m == nil {
 		return nil, fmt.Errorf("route manager is nil")
 	}
-
-	if outbound, exists := m.rules[inboundTag]; exists {
-		return outbound, nil
+	entry, ok := m.entries[inboundTag]
+	if !ok || entry.kind != "relay" {
+		return nil, fmt.Errorf("no relay route for inbound %q", inboundTag)
 	}
+	return entry.relay, nil
+}
 
-	if m.defaultOutbound != nil {
-		return m.defaultOutbound, nil
+// ResolveProxy 优先按域名规则选择出站，未匹配则回退到必填的 freedom/blackhole 默认出站。
+// 域名匹配严格按标签边界检查：example.com 可命中 a.example.com，不会命中 fakeexample.com。
+func (m *Manager) ResolveProxy(inboundTag, hostname string) (*config.OutboundConfig, error) {
+	if m == nil {
+		return nil, fmt.Errorf("route manager is nil")
 	}
-
-	return nil, fmt.Errorf("no outbound route for inbound %q", inboundTag)
+	entry, ok := m.entries[inboundTag]
+	if !ok || entry.kind != "proxy" || entry.proxy == nil {
+		return nil, fmt.Errorf("no proxy route for inbound %q", inboundTag)
+	}
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	for _, policy := range entry.proxy.Policies {
+		for _, domain := range policy.Domain {
+			suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+			if suffix == "*" || host == suffix || strings.HasSuffix(host, "."+suffix) {
+				return m.outbounds[policy.Outbound], nil
+			}
+		}
+	}
+	return m.outbounds[entry.proxy.DefaultOutbound], nil
 }

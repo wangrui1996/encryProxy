@@ -5,10 +5,11 @@ import (
 )
 
 type AccountConfig struct {
-    Name      string          `json:"name"`
-    Password  string          `json:"password"`
-    Enabled   bool            `json:"enabled"`
-    RateLimit RateLimitConfig `json:"rate_limit"`
+    Name         string          `json:"name"`
+    Password     string          `json:"password"`
+    CryptoEnable bool            `json:"crypto_enable"`
+    ProxyEnable  bool            `json:"proxy_enable"`
+    RateLimit    RateLimitConfig `json:"rate_limit"`
 }
 
 func (c *AccountConfig) Validate() error {

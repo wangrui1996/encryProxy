@@ -1,323 +1,175 @@
 package core
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"sync"
 
 	"wangjui.com/enproxy/proxy/common"
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/protocol"
 	"wangjui.com/enproxy/proxy/stat"
 )
 
 var Logger = common.Log
 
-// Account 是认证成功后的运行时账号。
-// RateLimit 在账号创建时初始化，同一账号的所有连接共享限速器。
+// Account 是认证成功后的运行时账号，账号级限速器为所有连接共享。
 type Account struct {
 	Name      string
 	RateLimit *RateLimit
 }
 
-// Authenticator 由外部 AccountManager 实现。
-// core 不需要知道账号是如何存储和管理的。
-type Authenticator interface {
-	Authenticate(username, password string) (*Account, error)
-}
-
-// RouteResolver 根据入站 Tag 选择上游。
-type RouteResolver interface {
-	Resolve(inboundTag string) (*config.OutboundConfig, error)
-}
-
-// Dialer 负责建立上游连接。
-type Dialer interface {
-	DialContext(ctx context.Context, address string) (net.Conn, error)
-}
-
-// Proxy 表示一个独立的入站代理实例。
+// Proxy 管理一个入站监听端口及其连接的公共处理逻辑。
 type Proxy struct {
-	inbound config.InboundConfig
-
+	inbound       config.InboundConfig
 	authenticator Authenticator
-	routeResolver RouteResolver
-	dialer        Dialer
+	handler       protocol.Handler
 
 	portRateLimit *RateLimit
 	traffic       *stat.Traffic
 	trafficMgr    *stat.Manager
+
+	listenerMu    sync.Mutex
+	listener      net.Listener
+	stopCh        chan struct{}
+	stopOnce      sync.Once
+	connectionsMu sync.Mutex
+	connections   map[net.Conn]struct{}
 }
 
-// Dependencies 是创建 Proxy 所需的外部依赖。
-type Dependencies struct {
-	Authenticator Authenticator
-	RouteResolver RouteResolver
-	Dialer        Dialer
-	Traffic       *stat.Manager
-}
-
-// NewProxy 创建单个入站代理。
-func NewProxy(
-	inbound config.InboundConfig,
-	deps Dependencies,
-) (*Proxy, error) {
-	if deps.RouteResolver == nil {
-		return nil, fmt.Errorf("route resolver is nil")
-	}
-	if deps.Dialer == nil {
-		return nil, fmt.Errorf("outbound dialer is nil")
+func NewProxy(inbound config.InboundConfig, deps Dependencies) (*Proxy, error) {
+	if err := inbound.Validate(); err != nil {
+		return nil, fmt.Errorf("inbound %q: %w", inbound.Tag, err)
 	}
 	if deps.Traffic == nil {
 		return nil, fmt.Errorf("traffic manager is nil")
 	}
-	if inbound.AuthRequired && deps.Authenticator == nil {
-		return nil, fmt.Errorf(
-			"inbound %q requires authentication, but authenticator is nil",
-			inbound.Tag,
-		)
+	if inbound.Crypto != nil && inbound.Crypto.AuthRequired && deps.Authenticator == nil {
+		return nil, fmt.Errorf("inbound %q needs crypto authenticator", inbound.Tag)
+	}
+	if inbound.Protocol == "http" && inbound.HTTP.AuthRequired && deps.Authenticator == nil {
+		return nil, fmt.Errorf("inbound %q needs HTTP proxy authenticator", inbound.Tag)
+	}
+
+	if deps.RouteResolver == nil || deps.Dialer == nil {
+		return nil, fmt.Errorf("inbound %q: route resolver and dialer are required", inbound.Tag)
+	}
+	protocolDial := newProtocolDial(deps.Dialer)
+
+	var handler protocol.Handler
+	switch inbound.Protocol {
+	case "tcp":
+		handler = &relayHandler{
+			inbound:       inbound,
+			routeResolver: deps.RouteResolver,
+			dial:          protocolDial,
+		}
+	case "http":
+		var err error
+		handler, err = protocol.NewHTTP(inbound, deps.RouteResolver, protocolDial)
+		if err != nil {
+			return nil, err
+		}
+	case "shadowsocks":
+		var err error
+		handler, err = protocol.NewShadowsocks(inbound, deps.RouteResolver, protocolDial)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("inbound %q: unsupported protocol %q", inbound.Tag, inbound.Protocol)
 	}
 
 	return &Proxy{
 		inbound:       inbound,
 		authenticator: deps.Authenticator,
-		routeResolver: deps.RouteResolver,
-		dialer:        deps.Dialer,
+		handler:       handler,
 		portRateLimit: NewRateLimit(inbound.RateLimit),
 		traffic:       deps.Traffic.Register(inbound.Listen),
 		trafficMgr:    deps.Traffic,
+		stopCh:        make(chan struct{}),
+		connections:   make(map[net.Conn]struct{}),
 	}, nil
 }
 
-// Run 启动 TCP 监听。
+// Run 阻塞运行入站监听器，直到 Close 被调用或监听失败。
 func (p *Proxy) Run() {
-	server, err := net.Listen("tcp", p.inbound.Listen)
+	listener, err := net.Listen("tcp", p.inbound.Listen)
 	if err != nil {
-		Logger.Errorf("listen %s failed: %v", p.inbound.Listen, err)
+		Logger.Errorf("listen %s (%s) failed: %v", p.inbound.Tag, p.inbound.Listen, err)
 		return
 	}
-	defer server.Close()
+	p.listenerMu.Lock()
+	select {
+	case <-p.stopCh:
+		p.listenerMu.Unlock()
+		_ = listener.Close()
+		return
+	default:
+		p.listener = listener
+	}
+	p.listenerMu.Unlock()
+	defer func() {
+		_ = listener.Close()
+		p.listenerMu.Lock()
+		if p.listener == listener {
+			p.listener = nil
+		}
+		p.listenerMu.Unlock()
+	}()
 
-	Logger.Infof(
-		"inbound %s listening on %s",
-		p.inbound.Tag,
-		p.inbound.Listen,
-	)
-
+	Logger.Infof("inbound %s listening on %s", p.inbound.Tag, listener.Addr())
 	for {
-		inboundConn, err := server.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			Logger.Errorf(
-				"accept on %s failed: %v",
-				p.inbound.Listen,
-				err,
-			)
-			continue
+			select {
+			case <-p.stopCh:
+				return
+			default:
+			}
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				Logger.Warnf("temporary accept failure on %s: %v", p.inbound.Tag, err)
+				continue
+			}
+			Logger.Errorf("accept on %s failed: %v", p.inbound.Tag, err)
+			return
 		}
-
-		Logger.Debugf(
-			"client %s connected to %s",
-			inboundConn.RemoteAddr(),
-			p.inbound.Tag,
-		)
-
-		go p.handleConnection(inboundConn)
+		p.connectionsMu.Lock()
+		select {
+		case <-p.stopCh:
+			p.connectionsMu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+			p.connections[conn] = struct{}{}
+		}
+		p.connectionsMu.Unlock()
+		go func(c net.Conn) {
+			defer func() {
+				_ = c.Close()
+				p.connectionsMu.Lock()
+				delete(p.connections, c)
+				p.connectionsMu.Unlock()
+			}()
+			p.handleConnection(c)
+		}(conn)
 	}
 }
 
-func (p *Proxy) handleConnection(inboundConn net.Conn) {
-	defer inboundConn.Close()
-
-	var account *Account
-	accountName := "anonymous"
-
-	if p.inbound.AuthRequired {
-		var err error
-
-		account, err = p.authenticate(inboundConn)
-		if err != nil {
-			Logger.Errorf(
-				"client %s authentication failed on %s: %v",
-				inboundConn.RemoteAddr(),
-				p.inbound.Tag,
-				err,
-			)
-			return
-		}
-
-		accountName = account.Name
-
-		Logger.Debugf(
-			"client %s authenticated as %s",
-			inboundConn.RemoteAddr(),
-			account.Name,
-		)
-	}
-
-	outbound, err := p.routeResolver.Resolve(p.inbound.Tag)
-	if err != nil {
-		Logger.Errorf(
-			"resolve route for inbound %s failed: %v",
-			p.inbound.Tag,
-			err,
-		)
+// Close 停止监听，同时关闭当前活动连接；可以重复调用。
+func (p *Proxy) Close() {
+	if p == nil {
 		return
 	}
-
-	outboundConn, err := p.dialer.DialContext(
-		context.Background(),
-		outbound.Server,
-	)
-	if err != nil {
-		Logger.Errorf(
-			"dial outbound %s (%s) failed: %v",
-			outbound.Tag,
-			outbound.Server,
-			err,
-		)
-		return
+	p.stopOnce.Do(func() { close(p.stopCh) })
+	p.listenerMu.Lock()
+	if p.listener != nil {
+		_ = p.listener.Close()
 	}
-	defer outboundConn.Close()
-
-	if outbound.Account != nil {
-		if err := authenticateOutbound(
-			outboundConn,
-			outbound.Account,
-			outbound.Crypto,
-		); err != nil {
-			Logger.Errorf(
-				"authenticate outbound %s (%s) failed: %v",
-				outbound.Tag,
-				outbound.Server,
-				err,
-			)
-			return
-		}
-
-		Logger.Debugf(
-			"authenticated to outbound %s as %s",
-			outbound.Tag,
-			outbound.Account.Username,
-		)
+	p.listenerMu.Unlock()
+	p.connectionsMu.Lock()
+	for c := range p.connections {
+		_ = c.Close()
 	}
-
-	var clientConn net.Conn = inboundConn
-
-	// 保持原有包装顺序：端口限速 -> 用户限速 -> 流量统计。
-	if p.portRateLimit != nil {
-		clientConn = NewRateLimitedConn(
-			clientConn,
-			p.portRateLimit,
-		)
-	}
-
-	if account != nil && account.RateLimit != nil {
-		clientConn = NewRateLimitedConn(
-			clientConn,
-			account.RateLimit,
-		)
-	}
-
-	userTraffic := p.trafficMgr.RegisterUser(accountName)
-	clientConn = stat.NewTrafficConn(
-		clientConn,
-		p.traffic,
-		userTraffic,
-	)
-
-	if err := p.handleTCPClient(
-		clientConn,
-		outboundConn,
-		outbound,
-	); err != nil {
-		Logger.Errorf(
-			"handle client %s on %s failed: %v",
-			inboundConn.RemoteAddr(),
-			p.inbound.Tag,
-			err,
-		)
-	}
-}
-
-func closeWrite(conn net.Conn) {
-	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
-		_ = conn.CloseWrite()
-		return
-	}
-
-	_ = conn.Close()
-}
-
-func (p *Proxy) handleTCPClient(
-	inboundConn net.Conn,
-	outboundConn net.Conn,
-	outbound *config.OutboundConfig,
-) error {
-	if outbound == nil {
-		return fmt.Errorf("outbound is nil")
-	}
-
-	var wait sync.WaitGroup
-	wait.Add(2)
-
-	errCh := make(chan error, 2)
-
-	go func() {
-		defer wait.Done()
-
-		err := p.handleUpstream(
-			inboundConn,
-			outboundConn,
-			outbound,
-		)
-		if err != nil {
-			err = fmt.Errorf("downstream -> upstream: %w", err)
-		}
-
-		errCh <- err
-
-		if err != nil {
-			_ = inboundConn.Close()
-			_ = outboundConn.Close()
-			return
-		}
-
-		closeWrite(outboundConn)
-	}()
-
-	go func() {
-		defer wait.Done()
-
-		err := p.handleDownstream(
-			outboundConn,
-			inboundConn,
-			outbound,
-		)
-		if err != nil {
-			err = fmt.Errorf("upstream -> downstream: %w", err)
-		}
-
-		errCh <- err
-
-		if err != nil {
-			_ = inboundConn.Close()
-			_ = outboundConn.Close()
-			return
-		}
-
-		closeWrite(inboundConn)
-	}()
-
-	wait.Wait()
-	close(errCh)
-
-	var firstErr error
-
-	for err := range errCh {
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-
-	return firstErr
+	p.connectionsMu.Unlock()
 }

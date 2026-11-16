@@ -10,91 +10,76 @@ import (
 )
 
 type accountEntry struct {
-	password string
-	enabled  bool
-	account  *core.Account
+	password     string
+	cryptoEnable bool
+	proxyEnable  bool
+	account      *core.Account
 }
 
-// AccountManager 管理所有下游登录账号。
+// AccountManager 管理下游账号，端口/账号限速器由已认证账号共享。
 type AccountManager struct {
 	mu       sync.RWMutex
 	accounts map[string]*accountEntry
 }
 
-func NewAccountManager(
-	configs []config.AccountConfig,
-) (*AccountManager, error) {
-	manager := &AccountManager{
-		accounts: make(map[string]*accountEntry, len(configs)),
-	}
-
+func NewAccountManager(configs []config.AccountConfig) (*AccountManager, error) {
+	manager := &AccountManager{accounts: make(map[string]*accountEntry, len(configs))}
 	for _, cfg := range configs {
-		if cfg.Name == "" {
-			return nil, fmt.Errorf("account name is empty")
-		}
-		if cfg.Password == "" {
-			return nil, fmt.Errorf(
-				"account %q password is empty",
-				cfg.Name,
-			)
+		if err := cfg.Validate(); err != nil {
+			return nil, err
 		}
 		if _, exists := manager.accounts[cfg.Name]; exists {
-			return nil, fmt.Errorf(
-				"duplicate account name: %s",
-				cfg.Name,
-			)
+			return nil, fmt.Errorf("duplicate account name %q", cfg.Name)
 		}
-
 		manager.accounts[cfg.Name] = &accountEntry{
-			password: cfg.Password,
-			enabled:  cfg.Enabled,
+			password:     cfg.Password,
+			cryptoEnable: cfg.CryptoEnable,
+			proxyEnable:  cfg.ProxyEnable,
 			account: &core.Account{
-				Name: cfg.Name,
-				RateLimit: core.NewRateLimit(
-					cfg.RateLimit,
-				),
+				Name:      cfg.Name,
+				RateLimit: core.NewRateLimit(cfg.RateLimit),
 			},
 		}
 	}
-
 	return manager, nil
 }
 
-// Authenticate 验证账号密码。
-// 认证失败时不区分账号不存在、密码错误或账号禁用。
-func (m *AccountManager) Authenticate(
-	username,
-	password string,
-) (*core.Account, error) {
+func (m *AccountManager) authenticate(username, password string, isCrypto bool) (*core.Account, error) {
 	if m == nil {
 		return nil, fmt.Errorf("account manager is nil")
 	}
-
 	m.mu.RLock()
-	entry, exists := m.accounts[username]
+	entry := m.accounts[username]
 	m.mu.RUnlock()
 
-	if !exists || entry == nil || !entry.enabled {
+	// 账号不存在、密码错误、授权类型不符统一返回同一种错误。
+	if entry == nil || (isCrypto && !entry.cryptoEnable) || (!isCrypto && !entry.proxyEnable) ||
+		subtle.ConstantTimeCompare([]byte(entry.password), []byte(password)) != 1 {
 		return nil, fmt.Errorf("invalid username or password")
 	}
-
-	if subtle.ConstantTimeCompare(
-		[]byte(entry.password),
-		[]byte(password),
-	) != 1 {
-		return nil, fmt.Errorf("invalid username or password")
-	}
-
 	return entry.account, nil
+}
+
+// AuthenticateCrypto 供 TCP 加密通道的认证使用。
+func (m *AccountManager) AuthenticateCrypto(username, password string) (*core.Account, error) {
+	return m.authenticate(username, password, true)
+}
+
+// AuthenticateProxy 为之后的 HTTP/其他代理协议认证预留。
+func (m *AccountManager) AuthenticateProxy(username, password string) (*core.Account, error) {
+	return m.authenticate(username, password, false)
+}
+
+// Authenticate 保留旧方法名，语义等同于 AuthenticateCrypto。
+func (m *AccountManager) Authenticate(username, password string) (*core.Account, error) {
+	return m.AuthenticateCrypto(username, password)
 }
 
 func (m *AccountManager) Count() int {
 	if m == nil {
 		return 0
 	}
-
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
 	return len(m.accounts)
 }
