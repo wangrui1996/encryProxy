@@ -17,7 +17,7 @@ func wrapCrypto(conn net.Conn, cfg *config.CryptoConfig) (net.Conn, error) {
 }
 
 // newProtocolDial owns outbound connection/authentication/encryption once for all protocols.
-func newProtocolDial(dialer Dialer) protocol.DialFunc {
+func newProtocolDial(dialer *OutboundDialer) protocol.DialFunc {
 	return func(ctx context.Context, out *config.OutboundConfig, address string) (net.Conn, error) {
 		conn, err := dialer.DialContext(ctx, address)
 		if err != nil {

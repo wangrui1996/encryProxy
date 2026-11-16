@@ -77,24 +77,3 @@ func validateOutboundList(outbounds []OutboundConfig) error {
 
 	return nil
 }
-
-// BuiltinOutbounds returns fresh built-in values; callers cannot change global state.
-func BuiltinOutbounds() map[string]*OutboundConfig {
-	return map[string]*OutboundConfig{
-		"freedom":   {Tag: "freedom", Protocol: "freedom"},
-		"blackhole": {Tag: "blackhole", Protocol: "blackhole"},
-	}
-}
-
-// BuildOutboundMap is shared by config validation and route construction.
-func BuildOutboundMap(outbounds []OutboundConfig) (map[string]*OutboundConfig, error) {
-	if err := validateOutboundList(outbounds); err != nil {
-		return nil, err
-	}
-	result := BuiltinOutbounds()
-	for i := range outbounds {
-		out := outbounds[i]
-		result[out.Tag] = &out
-	}
-	return result, nil
-}

@@ -9,6 +9,7 @@ import (
 	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
 	"wangjui.com/enproxy/proxy/protocol"
+	"wangjui.com/enproxy/proxy/route"
 	"wangjui.com/enproxy/proxy/stat"
 )
 
@@ -20,9 +21,9 @@ type Account struct {
 
 // Proxy 管理一个入站监听端口及其连接的公共处理逻辑。
 type Proxy struct {
-	inbound       config.InboundConfig
-	authenticator Authenticator
-	handler       protocol.Handler
+	inbound        config.InboundConfig
+	accountManager *AccountManager
+	handler        protocol.Handler
 
 	portRateLimit *core.RateLimit
 	traffic       *stat.Traffic
@@ -38,42 +39,50 @@ type Proxy struct {
 	connections   map[net.Conn]struct{}
 }
 
-func NewProxy(inbound config.InboundConfig, deps Dependencies) (*Proxy, error) {
+// NewProxy 使用 ProxyManager 创建的具体组件组装一个入站监听器。
+// 根包不再维护 Dependencies 聚合结构或额外的依赖接口。
+func NewProxy(
+	inbound config.InboundConfig,
+	accounts *AccountManager,
+	routes *route.Manager,
+	dialer *OutboundDialer,
+	traffic *stat.Manager,
+) (*Proxy, error) {
 	if err := inbound.Validate(); err != nil {
 		return nil, fmt.Errorf("inbound %q: %w", inbound.Tag, err)
 	}
-	if deps.Traffic == nil {
+	if traffic == nil {
 		return nil, fmt.Errorf("traffic manager is nil")
 	}
-	if inbound.Crypto != nil && inbound.Crypto.AuthRequired && deps.Authenticator == nil {
+	if inbound.Crypto != nil && inbound.Crypto.AuthRequired && accounts == nil {
 		return nil, fmt.Errorf("inbound %q needs crypto authenticator", inbound.Tag)
 	}
-	if inbound.Protocol == "http" && inbound.HTTP.AuthRequired && deps.Authenticator == nil {
+	if inbound.Protocol == "http" && inbound.HTTP.AuthRequired && accounts == nil {
 		return nil, fmt.Errorf("inbound %q needs HTTP proxy authenticator", inbound.Tag)
 	}
 
-	if deps.RouteResolver == nil || deps.Dialer == nil {
-		return nil, fmt.Errorf("inbound %q: route resolver and dialer are required", inbound.Tag)
+	if routes == nil || dialer == nil {
+		return nil, fmt.Errorf("inbound %q: route manager and outbound dialer are required", inbound.Tag)
 	}
-	protocolDial := newProtocolDial(deps.Dialer)
+	protocolDial := newProtocolDial(dialer)
 
 	var handler protocol.Handler
 	switch inbound.Protocol {
 	case "tcp":
 		var err error
-		handler, err = protocol.NewTCP(inbound, deps.RouteResolver, protocolDial, core.Relay)
+		handler, err = protocol.NewTCP(inbound, routes, protocolDial, core.Relay)
 		if err != nil {
 			return nil, err
 		}
 	case "http":
 		var err error
-		handler, err = protocol.NewHTTP(inbound, deps.RouteResolver, protocolDial, core.Relay)
+		handler, err = protocol.NewHTTP(inbound, routes, protocolDial, core.Relay)
 		if err != nil {
 			return nil, err
 		}
 	case "shadowsocks":
 		var err error
-		handler, err = protocol.NewShadowsocks(inbound, deps.RouteResolver, protocolDial, core.Relay)
+		handler, err = protocol.NewShadowsocks(inbound, routes, protocolDial, core.Relay)
 		if err != nil {
 			return nil, err
 		}
@@ -83,16 +92,16 @@ func NewProxy(inbound config.InboundConfig, deps Dependencies) (*Proxy, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Proxy{
-		inbound:       inbound,
-		authenticator: deps.Authenticator,
-		handler:       handler,
-		portRateLimit: core.NewRateLimit(inbound.RateLimit),
-		traffic:       deps.Traffic.Register(inbound.Listen),
-		trafficMgr:    deps.Traffic,
-		stopCh:        make(chan struct{}),
-		ctx:           ctx,
-		cancel:        cancel,
-		connections:   make(map[net.Conn]struct{}),
+		inbound:        inbound,
+		accountManager: accounts,
+		handler:        handler,
+		portRateLimit:  core.NewRateLimit(inbound.RateLimit),
+		traffic:        traffic.Register(inbound.Listen),
+		trafficMgr:     traffic,
+		stopCh:         make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
+		connections:    make(map[net.Conn]struct{}),
 	}, nil
 }
 

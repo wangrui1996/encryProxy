@@ -42,15 +42,15 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
 	}
 
 	proxyAuthenticate := func(username, password string) error {
-		if p.authenticator == nil {
-			return fmt.Errorf("proxy authenticator is nil")
+		if p.accountManager == nil {
+			return fmt.Errorf("proxy account manager is nil")
 		}
-		acc, err := p.authenticator.AuthenticateProxy(username, password)
+		acc, err := p.accountManager.AuthenticateProxy(username, password)
 		if err != nil {
 			return err
 		}
 		if acc == nil {
-			return fmt.Errorf("proxy authenticator returned nil account")
+			return fmt.Errorf("proxy account manager returned nil account")
 		}
 		// An authenticated custom crypto account takes precedence over the
 		// proxy protocol account for limit and traffic attribution.

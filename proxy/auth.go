@@ -182,10 +182,10 @@ func writeAuthFrame(
 	return err
 }
 
-// authenticate 通过注入的 Authenticator 完成下游认证。
+// authenticate 通过账号管理器 完成下游认证。
 func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
-	if p.authenticator == nil {
-		return nil, fmt.Errorf("authenticator is not initialized")
+	if p.accountManager == nil {
+		return nil, fmt.Errorf("account manager is not initialized")
 	}
 
 	if err := conn.SetDeadline(time.Now().Add(authTimeout)); err != nil {
@@ -211,7 +211,7 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 		return nil, err
 	}
 
-	account, authErr := p.authenticator.AuthenticateCrypto(
+	account, authErr := p.accountManager.AuthenticateCrypto(
 		request.Username,
 		request.Password,
 	)
@@ -230,7 +230,7 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 	}
 
 	if account == nil {
-		return nil, fmt.Errorf("authenticator returned nil account")
+		return nil, fmt.Errorf("account manager returned nil account")
 	}
 
 	if err := writeAuthFrame(

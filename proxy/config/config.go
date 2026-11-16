@@ -90,9 +90,14 @@ func (cfg *Config) Validate() error {
 // 校验配置之间的引用关系。
 func (cfg *Config) validateReferences() error {
 	inboundTags := make(map[string]*InboundConfig, len(cfg.Inbounds))
-	outboundTags, err := BuildOutboundMap(cfg.Outbounds)
-	if err != nil {
-		return err
+	// 配置层只校验引用是否存在、协议是否兼容，不管理运行时 outbound。
+	// outbound 的索引构建和路由选择由 route 模块负责。
+	outboundProtocols := make(map[string]string, len(cfg.Outbounds)+2)
+	outboundProtocols["freedom"] = "freedom"
+	outboundProtocols["blackhole"] = "blackhole"
+	for i := range cfg.Outbounds {
+		out := &cfg.Outbounds[i]
+		outboundProtocols[out.Tag] = out.Protocol
 	}
 
 	for i := range cfg.Inbounds {
@@ -127,23 +132,23 @@ func (cfg *Config) validateReferences() error {
 			}
 		}
 		for _, tag := range targets {
-			outbound, exists := outboundTags[tag]
+			protocol, exists := outboundProtocols[tag]
 			if !exists {
 				return fmt.Errorf("route[%d] references unknown outbound %q", i, tag)
 			}
 			// Relay 没有动态目标地址；TCP 出站也不传递代理目标地址。
-			if route.Type == "relay" && outbound.Protocol != "tcp" {
+			if route.Type == "relay" && protocol != "tcp" {
 				return fmt.Errorf("relay route[%d] requires tcp outbound %q", i, tag)
 			}
 			if route.Type == "proxy" {
-				if tag == route.Proxy.DefaultOutbound && outbound.Protocol != "freedom" && outbound.Protocol != "blackhole" {
+				if tag == route.Proxy.DefaultOutbound && protocol != "freedom" && protocol != "blackhole" {
 					return fmt.Errorf("proxy route[%d]: default outbound %q must be freedom or blackhole", i, tag)
 				}
-				switch outbound.Protocol {
+				switch protocol {
 				case "freedom", "blackhole", "http", "shadowsocks":
 					// 支持直连、静默丢弃、HTTP 和 Shadowsocks 上游。
 				default:
-					return fmt.Errorf("proxy route[%d]: outbound %q protocol %q is not implemented for proxy routing", i, tag, outbound.Protocol)
+					return fmt.Errorf("proxy route[%d]: outbound %q protocol %q is not implemented for proxy routing", i, tag, protocol)
 				}
 			}
 		}

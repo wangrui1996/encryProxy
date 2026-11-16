@@ -6,15 +6,17 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+
+	"wangjui.com/enproxy/proxy/dns"
 )
 
 type OutboundDialer struct {
-	resolver DNSResolver
+	resolver *dns.Resolver
 	dialer   net.Dialer
 	nextIP   atomic.Uint64
 }
 
-func NewOutboundDialer(resolver DNSResolver) *OutboundDialer {
+func NewOutboundDialer(resolver *dns.Resolver) *OutboundDialer {
 	return &OutboundDialer{
 		resolver: resolver,
 		dialer: net.Dialer{

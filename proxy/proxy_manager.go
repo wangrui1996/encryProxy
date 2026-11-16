@@ -88,16 +88,15 @@ func NewProxyManager(
 		accounts:       append([]config.AccountConfig(nil), cfg.Accounts...),
 	}
 
-	// 5. 组装 Proxy。
-	deps := Dependencies{
-		Authenticator: accountManager,
-		RouteResolver: routeManager,
-		Dialer:        outboundDialer,
-		Traffic:       trafficManager,
-	}
-
+	// 5. 显式传入实际使用的组件，不再依赖 Dependencies 聚合结构。
 	for _, inbound := range cfg.Inbounds {
-		proxyInstance, err := NewProxy(inbound, deps)
+		proxyInstance, err := NewProxy(
+			inbound,
+			accountManager,
+			routeManager,
+			outboundDialer,
+			trafficManager,
+		)
 		if err != nil {
 			dnsResolver.Close()
 			return nil, fmt.Errorf(
