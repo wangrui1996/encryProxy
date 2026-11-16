@@ -1,4 +1,4 @@
-package protocol
+package core
 
 import (
 	"crypto/aes"
@@ -16,31 +16,37 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
-
-	"wangjui.com/enproxy/proxy/config"
 )
 
 // Classic Shadowsocks AEAD (SIP004/SIP007), NOT Shadowsocks 2022.
+// Kept separate from CryptoCodec: the two wire formats are incompatible.
 // Each TCP direction is: salt | AEAD(length) | AEAD(payload) | ...
 const maxSSChunk = 0x3fff
 
 var errSSReplay = errors.New("replayed Shadowsocks TCP salt")
 
-type ssCipher struct {
+type ShadowsocksCipher struct {
 	method string
 	key    []byte
 	seen   *ssSaltCache // only enabled for inbound streams
 }
 
-func newSSCipher(cfg *config.ShadowsocksConfig, inbound bool) (*ssCipher, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
+// NewShadowsocksCipher prepares a classic Shadowsocks AEAD cipher suite.
+// When inbound is true, the suite shares a replay cache across accepted connections.
+// It is independent of the application config and route packages.
+func NewShadowsocksCipher(method, password string, inbound bool) (*ShadowsocksCipher, error) {
 	keySize := 32
-	if cfg.Method == "aes-128-gcm" {
+	switch method {
+	case "aes-128-gcm":
 		keySize = 16
+	case "aes-256-gcm", "chacha20-ietf-poly1305":
+	default:
+		return nil, fmt.Errorf("unsupported Shadowsocks method %q", method)
 	}
-	s := &ssCipher{method: cfg.Method, key: ssEVPBytesToKey([]byte(cfg.Password), keySize)}
+	if password == "" {
+		return nil, errors.New("Shadowsocks password is empty")
+	}
+	s := &ShadowsocksCipher{method: method, key: ssEVPBytesToKey([]byte(password), keySize)}
 	if inbound {
 		s.seen = &ssSaltCache{entries: make(map[[sha256.Size]byte]time.Time)}
 	}
@@ -61,7 +67,7 @@ func ssEVPBytesToKey(password []byte, keyLen int) []byte {
 	return key[:keyLen]
 }
 
-func (s *ssCipher) newAEAD(salt []byte) (cipher.AEAD, error) {
+func (s *ShadowsocksCipher) newAEAD(salt []byte) (cipher.AEAD, error) {
 	if len(salt) != len(s.key) {
 		return nil, fmt.Errorf("invalid Shadowsocks salt size %d", len(salt))
 	}
@@ -123,9 +129,9 @@ func (c *ssSaltCache) accept(salt []byte) error {
 	return nil
 }
 
-type ssStream struct {
+type ShadowsocksConn struct {
 	net.Conn
-	suite      *ssCipher
+	suite      *ShadowsocksCipher
 	readMu     sync.Mutex
 	writeMu    sync.Mutex
 	readAEAD   cipher.AEAD
@@ -137,8 +143,10 @@ type ssStream struct {
 	checked    bool
 }
 
-func newSSStream(conn net.Conn, suite *ssCipher) *ssStream {
-	return &ssStream{Conn: conn, suite: suite}
+// NewShadowsocksConn wraps a transport in classic Shadowsocks TCP AEAD framing.
+// Keep one conn per TCP session; reuse the cipher suite across inbound sessions.
+func NewShadowsocksConn(conn net.Conn, suite *ShadowsocksCipher) *ShadowsocksConn {
+	return &ShadowsocksConn{Conn: conn, suite: suite}
 }
 
 func advanceSSNonce(n *[12]byte) error {
@@ -165,7 +173,7 @@ func writeSSFull(w io.Writer, p []byte) error {
 	return nil
 }
 
-func (s *ssStream) initReader() error {
+func (s *ShadowsocksConn) initReader() error {
 	if s.readAEAD != nil {
 		return nil
 	}
@@ -181,7 +189,7 @@ func (s *ssStream) initReader() error {
 	return nil
 }
 
-func (s *ssStream) openChunk(size int) ([]byte, error) {
+func (s *ShadowsocksConn) openChunk(size int) ([]byte, error) {
 	encrypted := make([]byte, size+s.readAEAD.Overhead())
 	if _, err := io.ReadFull(s.Conn, encrypted); err != nil {
 		return nil, err
@@ -196,7 +204,7 @@ func (s *ssStream) openChunk(size int) ([]byte, error) {
 	return plain, nil
 }
 
-func (s *ssStream) Read(p []byte) (int, error) {
+func (s *ShadowsocksConn) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -231,7 +239,7 @@ func (s *ssStream) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (s *ssStream) initWriter() error {
+func (s *ShadowsocksConn) initWriter() error {
 	if s.writeAEAD != nil {
 		return nil
 	}
@@ -250,7 +258,7 @@ func (s *ssStream) initWriter() error {
 	return nil
 }
 
-func (s *ssStream) sealChunk(p []byte) error {
+func (s *ShadowsocksConn) sealChunk(p []byte) error {
 	sealed := s.writeAEAD.Seal(nil, s.writeNonce[:], p, nil)
 	if err := advanceSSNonce(&s.writeNonce); err != nil {
 		return err
@@ -258,7 +266,7 @@ func (s *ssStream) sealChunk(p []byte) error {
 	return writeSSFull(s.Conn, sealed)
 }
 
-func (s *ssStream) Write(p []byte) (int, error) {
+func (s *ShadowsocksConn) Write(p []byte) (int, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if len(p) == 0 {
@@ -286,7 +294,7 @@ func (s *ssStream) Write(p []byte) (int, error) {
 	return total, nil
 }
 
-func (s *ssStream) CloseWrite() error {
+func (s *ShadowsocksConn) CloseWrite() error {
 	if cw, ok := s.Conn.(interface{ CloseWrite() error }); ok {
 		return cw.CloseWrite()
 	}

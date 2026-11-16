@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
 )
 
 // ShadowsocksClient dials an upstream Shadowsocks server and sends the
@@ -24,7 +25,7 @@ func (c ShadowsocksClient) Connect(ctx context.Context, out *config.OutboundConf
 	if err != nil {
 		return nil, err
 	}
-	suite, err := newSSCipher(out.Shadowsocks, false)
+	suite, err := core.NewShadowsocksCipher(out.Shadowsocks.Method, out.Shadowsocks.Password, false)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +33,7 @@ func (c ShadowsocksClient) Connect(ctx context.Context, out *config.OutboundConf
 	if err != nil {
 		return nil, err
 	}
-	conn := newSSStream(raw, suite)
+	conn := core.NewShadowsocksConn(raw, suite)
 	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = conn.Close()
 		return nil, err

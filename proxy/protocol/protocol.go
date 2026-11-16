@@ -1,5 +1,5 @@
 // Package protocol contains application-layer proxy protocols and their outbound transports.
-// It does not depend on core, stat, route or proxy, preventing import cycles.
+// It uses core transport primitives but does not depend on stat, route or proxy.
 package protocol
 
 import (

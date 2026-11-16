@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
 )
 
 // Shadowsocks is an inbound classic AEAD Shadowsocks TCP server.
@@ -16,7 +17,7 @@ type Shadowsocks struct {
 	Routes  Resolver
 	Dial    DialFunc
 	Relay   RelayFunc
-	cipher  *ssCipher
+	cipher  *core.ShadowsocksCipher
 }
 
 func NewShadowsocks(in config.InboundConfig, routes Resolver, dial DialFunc, relay RelayFunc) (*Shadowsocks, error) {
@@ -26,7 +27,7 @@ func NewShadowsocks(in config.InboundConfig, routes Resolver, dial DialFunc, rel
 	if routes == nil || dial == nil || relay == nil {
 		return nil, fmt.Errorf("Shadowsocks route resolver, dialer and relay are required")
 	}
-	suite, err := newSSCipher(in.Shadowsocks, true)
+	suite, err := core.NewShadowsocksCipher(in.Shadowsocks.Method, in.Shadowsocks.Password, true)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +38,7 @@ func (s *Shadowsocks) Handle(ctx context.Context, downstream net.Conn, _ Authent
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	clear := newSSStream(downstream, s.cipher)
+	clear := core.NewShadowsocksConn(downstream, s.cipher)
 	// Initial salt, encrypted address header and routing phase must not wait forever.
 	_ = downstream.SetReadDeadline(time.Now().Add(15 * time.Second))
 	target, hostname, err := readTargetAddress(clear)
