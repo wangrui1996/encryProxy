@@ -6,9 +6,6 @@ import (
 	"sync"
 )
 
-// CryptoConn adapts the existing per-frame AES-GCM Codec to net.Conn, allowing
-// application protocols (HTTP in particular) to use the same encrypted tunnel.
-// Read/Write each have independent locks, so full-duplex operation is supported.
 type CryptoConn struct {
 	net.Conn
 	decoder Codec
@@ -16,6 +13,7 @@ type CryptoConn struct {
 	readMu  sync.Mutex
 	writeMu sync.Mutex
 	pending []byte
+	readBuf []byte // 每连接只分配一次；不能在 pending 消费完之前覆盖
 }
 
 func NewCryptoConn(conn net.Conn, key string) (*CryptoConn, error) {
@@ -37,7 +35,10 @@ func (c *CryptoConn) Read(b []byte) (int, error) {
 		return 0, nil
 	}
 	for len(c.pending) == 0 {
-		payload, err := c.decoder.Decode(c.Conn, nil)
+		if c.readBuf == nil {
+			c.readBuf = make([]byte, cryptoBufferSize)
+		}
+		payload, err := c.decoder.Decode(c.Conn, c.readBuf)
 		if err != nil {
 			return 0, err
 		}

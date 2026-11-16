@@ -139,6 +139,7 @@ type ShadowsocksConn struct {
 	readNonce  [12]byte
 	writeNonce [12]byte
 	pending    []byte
+	readBuf    []byte // 每连接复用，pending 未消费完前不覆盖
 	readSalt   []byte
 	checked    bool
 }
@@ -190,11 +191,15 @@ func (s *ShadowsocksConn) initReader() error {
 }
 
 func (s *ShadowsocksConn) openChunk(size int) ([]byte, error) {
-	encrypted := make([]byte, size+s.readAEAD.Overhead())
+	needed := size + s.readAEAD.Overhead()
+	if s.readBuf == nil {
+		s.readBuf = make([]byte, maxSSChunk+s.readAEAD.Overhead())
+	}
+	encrypted := s.readBuf[:needed]
 	if _, err := io.ReadFull(s.Conn, encrypted); err != nil {
 		return nil, err
 	}
-	plain, err := s.readAEAD.Open(nil, s.readNonce[:], encrypted, nil)
+	plain, err := s.readAEAD.Open(encrypted[:0], s.readNonce[:], encrypted, nil)
 	if err != nil {
 		return nil, fmt.Errorf("Shadowsocks authentication failed: %w", err)
 	}
@@ -258,8 +263,8 @@ func (s *ShadowsocksConn) initWriter() error {
 	return nil
 }
 
-func (s *ShadowsocksConn) sealChunk(p []byte) error {
-	sealed := s.writeAEAD.Seal(nil, s.writeNonce[:], p, nil)
+func (s *ShadowsocksConn) sealChunk(p []byte, scratch []byte) error {
+	sealed := s.writeAEAD.Seal(scratch[:0], s.writeNonce[:], p, nil)
 	if err := advanceSSNonce(&s.writeNonce); err != nil {
 		return err
 	}
@@ -275,6 +280,8 @@ func (s *ShadowsocksConn) Write(p []byte) (int, error) {
 	if err := s.initWriter(); err != nil {
 		return 0, err
 	}
+	scratch := GetCopyBuffer()
+	defer PutCopyBuffer(scratch)
 	total := 0
 	for len(p) > 0 {
 		n := len(p)
@@ -282,10 +289,10 @@ func (s *ShadowsocksConn) Write(p []byte) (int, error) {
 			n = maxSSChunk
 		}
 		header := [2]byte{byte(n >> 8), byte(n)}
-		if err := s.sealChunk(header[:]); err != nil {
+		if err := s.sealChunk(header[:], scratch); err != nil {
 			return total, err
 		}
-		if err := s.sealChunk(p[:n]); err != nil {
+		if err := s.sealChunk(p[:n], scratch); err != nil {
 			return total, err
 		}
 		total += n
