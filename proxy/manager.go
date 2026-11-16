@@ -21,11 +21,7 @@ type ProxyManager struct {
 	trafficManager *stat.Manager
 	dnsResolver    *dns.Resolver
 
-	webConfig config.WebConfig
 	webServer *web.WebServer
-
-	inbounds []config.InboundConfig
-	accounts []config.AccountConfig
 }
 
 // NewProxyManager 从 JSON 配置文件创建整个代理运行环境。
@@ -69,9 +65,6 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 	manager := &ProxyManager{
 		proxies:        make([]*Proxy, 0, len(cfg.Inbounds)),
 		trafficManager: stat.NewManager(),
-		webConfig:      cfg.Web,
-		inbounds:       append([]config.InboundConfig(nil), cfg.Inbounds...),
-		accounts:       append([]config.AccountConfig(nil), cfg.Accounts...),
 	}
 
 	// 任意一个组件构造失败，都释放已经创建的 DNS/统计资源。
@@ -113,6 +106,17 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 		manager.proxies = append(manager.proxies, proxyInstance)
 	}
 
+	// WebServer 在构造阶段创建，Start 仅负责启动。
+	// 未启用 Web 时保持 nil，不创建 HTTP 服务。
+	if cfg.Web.Enabled {
+		manager.webServer = web.NewWebServer(
+			cfg.Web.Listen,
+			manager.trafficManager,
+			append([]config.InboundConfig(nil), cfg.Inbounds...),
+			append([]config.AccountConfig(nil), cfg.Accounts...),
+		)
+	}
+
 	initialized = true
 	return manager, nil
 }
@@ -132,13 +136,7 @@ func (manager *ProxyManager) Start() {
 		go proxyInstance.Run()
 	}
 
-	if manager.webConfig.Enabled {
-		manager.webServer = web.NewWebServer(
-			manager.webConfig.Listen,
-			manager.trafficManager,
-			manager.inbounds,
-			manager.accounts,
-		)
+	if manager.webServer != nil {
 		go manager.webServer.Run()
 	}
 }
