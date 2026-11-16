@@ -1,22 +1,21 @@
-package core
+package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
 
-	"wangjui.com/enproxy/proxy/common"
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
 	"wangjui.com/enproxy/proxy/protocol"
 	"wangjui.com/enproxy/proxy/stat"
 )
 
-var Logger = common.Log
-
 // Account 是认证成功后的运行时账号，账号级限速器为所有连接共享。
 type Account struct {
 	Name      string
-	RateLimit *RateLimit
+	RateLimit *core.RateLimit
 }
 
 // Proxy 管理一个入站监听端口及其连接的公共处理逻辑。
@@ -25,7 +24,7 @@ type Proxy struct {
 	authenticator Authenticator
 	handler       protocol.Handler
 
-	portRateLimit *RateLimit
+	portRateLimit *core.RateLimit
 	traffic       *stat.Traffic
 	trafficMgr    *stat.Manager
 
@@ -33,6 +32,8 @@ type Proxy struct {
 	listener      net.Listener
 	stopCh        chan struct{}
 	stopOnce      sync.Once
+	ctx           context.Context
+	cancel        context.CancelFunc
 	connectionsMu sync.Mutex
 	connections   map[net.Conn]struct{}
 }
@@ -59,20 +60,20 @@ func NewProxy(inbound config.InboundConfig, deps Dependencies) (*Proxy, error) {
 	var handler protocol.Handler
 	switch inbound.Protocol {
 	case "tcp":
-		handler = &relayHandler{
-			inbound:       inbound,
-			routeResolver: deps.RouteResolver,
-			dial:          protocolDial,
+		var err error
+		handler, err = protocol.NewTCP(inbound, deps.RouteResolver, protocolDial, core.Relay)
+		if err != nil {
+			return nil, err
 		}
 	case "http":
 		var err error
-		handler, err = protocol.NewHTTP(inbound, deps.RouteResolver, protocolDial)
+		handler, err = protocol.NewHTTP(inbound, deps.RouteResolver, protocolDial, core.Relay)
 		if err != nil {
 			return nil, err
 		}
 	case "shadowsocks":
 		var err error
-		handler, err = protocol.NewShadowsocks(inbound, deps.RouteResolver, protocolDial)
+		handler, err = protocol.NewShadowsocks(inbound, deps.RouteResolver, protocolDial, core.Relay)
 		if err != nil {
 			return nil, err
 		}
@@ -80,14 +81,17 @@ func NewProxy(inbound config.InboundConfig, deps Dependencies) (*Proxy, error) {
 		return nil, fmt.Errorf("inbound %q: unsupported protocol %q", inbound.Tag, inbound.Protocol)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Proxy{
 		inbound:       inbound,
 		authenticator: deps.Authenticator,
 		handler:       handler,
-		portRateLimit: NewRateLimit(inbound.RateLimit),
+		portRateLimit: core.NewRateLimit(inbound.RateLimit),
 		traffic:       deps.Traffic.Register(inbound.Listen),
 		trafficMgr:    deps.Traffic,
 		stopCh:        make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 		connections:   make(map[net.Conn]struct{}),
 	}, nil
 }
@@ -161,7 +165,7 @@ func (p *Proxy) Close() {
 	if p == nil {
 		return
 	}
-	p.stopOnce.Do(func() { close(p.stopCh) })
+	p.stopOnce.Do(func() { p.cancel(); close(p.stopCh) })
 	p.listenerMu.Lock()
 	if p.listener != nil {
 		_ = p.listener.Close()

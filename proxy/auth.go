@@ -1,4 +1,4 @@
-package core
+package proxy
 
 import (
 	"encoding/binary"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
 )
 
 const (
@@ -111,7 +112,7 @@ func readAuthFrame(
 	crypto *config.CryptoConfig,
 ) ([]byte, error) {
 	if crypto != nil {
-		codec, err := NewCodec(true, crypto.Key)
+		codec, err := core.NewCodec(true, crypto.Key)
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +163,7 @@ func writeAuthFrame(
 	}
 
 	if crypto != nil {
-		codec, err := NewCodec(true, crypto.Key)
+		codec, err := core.NewCodec(true, crypto.Key)
 		if err != nil {
 			return err
 		}
@@ -173,11 +174,11 @@ func writeAuthFrame(
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
 
-	if _, err := writeFull(conn, header[:]); err != nil {
+	if _, err := writeAuthFull(conn, header[:]); err != nil {
 		return err
 	}
 
-	_, err := writeFull(conn, payload)
+	_, err := writeAuthFull(conn, payload)
 	return err
 }
 
@@ -285,4 +286,24 @@ func authenticateOutbound(
 	}
 
 	return nil
+}
+
+// writeAuthFull preserves the auth wire format even on short writes.
+func writeAuthFull(dst io.Writer, data []byte) (int, error) {
+	total := 0
+	for len(data) != 0 {
+		n, err := dst.Write(data)
+		if n < 0 || n > len(data) {
+			return total, fmt.Errorf("invalid auth write count %d", n)
+		}
+		total += n
+		data = data[n:]
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			return total, io.ErrShortWrite
+		}
+	}
+	return total, nil
 }

@@ -15,21 +15,22 @@ type Shadowsocks struct {
 	Inbound config.InboundConfig
 	Routes  Resolver
 	Dial    DialFunc
+	Relay   RelayFunc
 	cipher  *ssCipher
 }
 
-func NewShadowsocks(in config.InboundConfig, routes Resolver, dial DialFunc) (*Shadowsocks, error) {
+func NewShadowsocks(in config.InboundConfig, routes Resolver, dial DialFunc, relay RelayFunc) (*Shadowsocks, error) {
 	if in.Protocol != "shadowsocks" || in.Shadowsocks == nil {
 		return nil, fmt.Errorf("Shadowsocks inbound config required")
 	}
-	if routes == nil || dial == nil {
-		return nil, fmt.Errorf("Shadowsocks route resolver and dialer are required")
+	if routes == nil || dial == nil || relay == nil {
+		return nil, fmt.Errorf("Shadowsocks route resolver, dialer and relay are required")
 	}
 	suite, err := newSSCipher(in.Shadowsocks, true)
 	if err != nil {
 		return nil, err
 	}
-	return &Shadowsocks{Inbound: in, Routes: routes, Dial: dial, cipher: suite}, nil
+	return &Shadowsocks{Inbound: in, Routes: routes, Dial: dial, Relay: relay, cipher: suite}, nil
 }
 
 func (s *Shadowsocks) Handle(ctx context.Context, downstream net.Conn, _ AuthenticateFunc) error {
@@ -59,5 +60,5 @@ func (s *Shadowsocks) Handle(ctx context.Context, downstream net.Conn, _ Authent
 		return fmt.Errorf("connect Shadowsocks destination %s: %w", target, err)
 	}
 	defer upstream.Close()
-	return Relay(clear, clear, upstream, upstreamReader)
+	return s.Relay(clear, clear, upstream, upstreamReader)
 }

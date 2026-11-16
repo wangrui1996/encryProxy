@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/core"
 	"wangjui.com/enproxy/proxy/dns"
 	"wangjui.com/enproxy/proxy/route"
 	"wangjui.com/enproxy/proxy/stat"
@@ -14,7 +13,7 @@ import (
 )
 
 type ProxyManager struct {
-	proxies []*core.Proxy
+	proxies []*Proxy
 
 	accountManager *AccountManager
 	routeManager   *route.Manager
@@ -76,10 +75,10 @@ func NewProxyManager(
 	}
 
 	// 4. 创建 core 所需的上游拨号器。
-	outboundDialer := core.NewOutboundDialer(dnsResolver)
+	outboundDialer := NewOutboundDialer(dnsResolver)
 
 	manager := &ProxyManager{
-		proxies:        make([]*core.Proxy, 0, len(cfg.Inbounds)),
+		proxies:        make([]*Proxy, 0, len(cfg.Inbounds)),
 		accountManager: accountManager,
 		routeManager:   routeManager,
 		trafficManager: trafficManager,
@@ -89,8 +88,8 @@ func NewProxyManager(
 		accounts:       append([]config.AccountConfig(nil), cfg.Accounts...),
 	}
 
-	// 5. 组装 core.Proxy。
-	deps := core.Dependencies{
+	// 5. 组装 Proxy。
+	deps := Dependencies{
 		Authenticator: accountManager,
 		RouteResolver: routeManager,
 		Dialer:        outboundDialer,
@@ -98,7 +97,7 @@ func NewProxyManager(
 	}
 
 	for _, inbound := range cfg.Inbounds {
-		proxyInstance, err := core.NewProxy(inbound, deps)
+		proxyInstance, err := NewProxy(inbound, deps)
 		if err != nil {
 			dnsResolver.Close()
 			return nil, fmt.Errorf(

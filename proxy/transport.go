@@ -1,9 +1,10 @@
-package core
+package proxy
 
 import (
 	"context"
 	"net"
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
 	"wangjui.com/enproxy/proxy/protocol"
 )
 
@@ -12,7 +13,7 @@ func wrapCrypto(conn net.Conn, cfg *config.CryptoConfig) (net.Conn, error) {
 	if cfg == nil {
 		return conn, nil
 	}
-	return NewCryptoConn(conn, cfg.Key)
+	return core.NewCryptoConn(conn, cfg.Key)
 }
 
 // newProtocolDial owns outbound connection/authentication/encryption once for all protocols.

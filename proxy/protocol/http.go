@@ -20,17 +20,18 @@ type HTTP struct {
 	Inbound    config.InboundConfig
 	Routes     Resolver
 	Dial       DialFunc
+	Relay      RelayFunc
 	transports sync.Map // map[OutboundTag]*http.Transport, shared by concurrent sessions
 }
 
-func NewHTTP(in config.InboundConfig, routes Resolver, dial DialFunc) (*HTTP, error) {
+func NewHTTP(in config.InboundConfig, routes Resolver, dial DialFunc, relay RelayFunc) (*HTTP, error) {
 	if in.Protocol != "http" || in.HTTP == nil {
 		return nil, fmt.Errorf("HTTP inbound config required")
 	}
-	if routes == nil || dial == nil {
-		return nil, fmt.Errorf("HTTP route resolver and dialer are required")
+	if routes == nil || dial == nil || relay == nil {
+		return nil, fmt.Errorf("HTTP route resolver, dialer and relay are required")
 	}
-	return &HTTP{Inbound: in, Routes: routes, Dial: dial}, nil
+	return &HTTP{Inbound: in, Routes: routes, Dial: dial, Relay: relay}, nil
 }
 
 func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate AuthenticateFunc) error {
@@ -100,7 +101,7 @@ func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstrea
 	if _, err := io.WriteString(downstream, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return err
 	}
-	return Relay(downstream, downstreamReader, upstream, upstreamReader)
+	return h.Relay(downstream, downstreamReader, upstream, upstreamReader)
 }
 
 func (h *HTTP) getTransport(out *config.OutboundConfig) (*http.Transport, error) {

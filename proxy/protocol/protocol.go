@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"context"
+	"io"
 	"net"
 
 	"wangjui.com/enproxy/proxy/config"
@@ -18,6 +19,10 @@ type Resolver interface {
 // framing and optional ENPA authentication. For freedom, address is the target.
 // For an HTTP outbound, address is the HTTP upstream's server.
 type DialFunc func(ctx context.Context, outbound *config.OutboundConfig, address string) (net.Conn, error)
+
+// RelayFunc forwards a full-duplex stream; core supplies the implementation.
+// Readers may be buffered (for example, after HTTP CONNECT negotiation).
+type RelayFunc func(downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error
 
 // AuthenticateFunc verifies an HTTP proxy username/password and updates the
 // current connection's account rate limiter and traffic attribution.

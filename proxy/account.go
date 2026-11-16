@@ -13,7 +13,7 @@ type accountEntry struct {
 	password     string
 	cryptoEnable bool
 	proxyEnable  bool
-	account      *core.Account
+	account      *Account
 }
 
 // AccountManager 管理下游账号，端口/账号限速器由已认证账号共享。
@@ -35,7 +35,7 @@ func NewAccountManager(configs []config.AccountConfig) (*AccountManager, error) 
 			password:     cfg.Password,
 			cryptoEnable: cfg.CryptoEnable,
 			proxyEnable:  cfg.ProxyEnable,
-			account: &core.Account{
+			account: &Account{
 				Name:      cfg.Name,
 				RateLimit: core.NewRateLimit(cfg.RateLimit),
 			},
@@ -44,7 +44,7 @@ func NewAccountManager(configs []config.AccountConfig) (*AccountManager, error) 
 	return manager, nil
 }
 
-func (m *AccountManager) authenticate(username, password string, isCrypto bool) (*core.Account, error) {
+func (m *AccountManager) authenticate(username, password string, isCrypto bool) (*Account, error) {
 	if m == nil {
 		return nil, fmt.Errorf("account manager is nil")
 	}
@@ -61,17 +61,17 @@ func (m *AccountManager) authenticate(username, password string, isCrypto bool) 
 }
 
 // AuthenticateCrypto 供 TCP 加密通道的认证使用。
-func (m *AccountManager) AuthenticateCrypto(username, password string) (*core.Account, error) {
+func (m *AccountManager) AuthenticateCrypto(username, password string) (*Account, error) {
 	return m.authenticate(username, password, true)
 }
 
 // AuthenticateProxy 为之后的 HTTP/其他代理协议认证预留。
-func (m *AccountManager) AuthenticateProxy(username, password string) (*core.Account, error) {
+func (m *AccountManager) AuthenticateProxy(username, password string) (*Account, error) {
 	return m.authenticate(username, password, false)
 }
 
 // Authenticate 保留旧方法名，语义等同于 AuthenticateCrypto。
-func (m *AccountManager) Authenticate(username, password string) (*core.Account, error) {
+func (m *AccountManager) Authenticate(username, password string) (*Account, error) {
 	return m.AuthenticateCrypto(username, password)
 }
 
