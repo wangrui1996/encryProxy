@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"golang.org/x/time/rate"
-	"wangjui.com/enproxy/proxy/config"
 )
 
 type RateLimit struct {
@@ -14,14 +13,14 @@ type RateLimit struct {
 	downloadLimiter *rate.Limiter
 }
 
-func NewRateLimit(cfg config.RateLimitConfig) *RateLimit {
+func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 	r := &RateLimit{}
 	const burst = 32 * 1024
-	if cfg.UploadKbps > 0 {
-		r.uploadLimiter = rate.NewLimiter(rate.Limit(float64(cfg.UploadKbps)*1024), burst)
+	if UploadKbps > 0 {
+		r.uploadLimiter = rate.NewLimiter(rate.Limit(float64(UploadKbps)*1024), burst)
 	}
-	if cfg.DownloadKbps > 0 {
-		r.downloadLimiter = rate.NewLimiter(rate.Limit(float64(cfg.DownloadKbps)*1024), burst)
+	if DownloadKbps > 0 {
+		r.downloadLimiter = rate.NewLimiter(rate.Limit(float64(DownloadKbps)*1024), burst)
 	}
 	return r
 }

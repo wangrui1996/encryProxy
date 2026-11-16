@@ -112,7 +112,7 @@ func NewProxy(
 		inbound:        inbound,
 		accountManager: accounts,
 		handler:        handler,
-		portRateLimit:  core.NewRateLimit(inbound.RateLimit),
+		portRateLimit:  core.NewRateLimit(inbound.RateLimit.UploadKbps, inbound.RateLimit.DownloadKbps),
 		traffic:        traffic.Register(inbound.Listen),
 		trafficMgr:     traffic,
 		stopCh:         make(chan struct{}),

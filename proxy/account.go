@@ -37,7 +37,7 @@ func NewAccountManager(configs []config.AccountConfig) (*AccountManager, error) 
 			proxyEnable:  cfg.ProxyEnable,
 			account: &Account{
 				Name:      cfg.Name,
-				RateLimit: core.NewRateLimit(cfg.RateLimit),
+				RateLimit: core.NewRateLimit(cfg.RateLimit.UploadKbps, cfg.RateLimit.DownloadKbps),
 			},
 		}
 	}
