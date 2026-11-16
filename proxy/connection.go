@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 
@@ -11,6 +12,8 @@ import (
 // handleConnection owns the composition of authentication, rate limit,
 // wire-byte traffic accounting and application protocol handling.
 func (p *Proxy) handleConnection(inboundConn net.Conn) {
+	ctx, cancel := context.WithCancel(p.ctx)
+	defer cancel()
 	accountName := "anonymous"
 	var cryptoAccount *Account
 	if p.inbound.Crypto != nil && p.inbound.Crypto.AuthRequired {
@@ -61,7 +64,7 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
 		return nil
 	}
 
-	if err := p.handler.Handle(p.ctx, clientConn, proxyAuthenticate); err != nil {
+	if err := p.handler.Handle(ctx, clientConn, proxyAuthenticate); err != nil {
 		Logger.Errorf("client %s on %s: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
 	}
 }

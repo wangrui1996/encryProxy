@@ -33,6 +33,8 @@ func (c ShadowsocksClient) Connect(ctx context.Context, out *config.OutboundConf
 	if err != nil {
 		return nil, err
 	}
+	stop := core.CloseOnCancel(ctx, raw)
+	defer stop()
 	conn := core.NewShadowsocksConn(raw, suite)
 	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = conn.Close()

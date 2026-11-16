@@ -1,7 +1,7 @@
-
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +43,27 @@ func Relay(
 	upstream net.Conn,
 	upReader io.Reader,
 ) error {
+	return RelayContext(context.Background(), downstream, downReader, upstream, upReader)
+}
+
+// RelayContext preserves half-close on EOF and closes both ends on cancellation.
+func RelayContext(ctx context.Context, downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+			downstream.Close()
+			upstream.Close()
+		case <-done:
+		}
+	}()
+	defer func() { close(done); <-watcherDone }()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 

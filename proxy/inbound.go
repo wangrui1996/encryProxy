@@ -3,8 +3,10 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
+	"time"
 
 	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
@@ -29,10 +31,15 @@ type Proxy struct {
 	traffic       *stat.Traffic
 	trafficMgr    *stat.Manager
 
-	listenerMu    sync.Mutex
+	lifecycleMu   sync.Mutex
+	started       bool
+	closed        bool
+	closeOnce     sync.Once
+	workers       sync.WaitGroup
+	serveDone     chan struct{}
+	runErr        error
 	listener      net.Listener
 	stopCh        chan struct{}
-	stopOnce      sync.Once
 	ctx           context.Context
 	cancel        context.CancelFunc
 	connectionsMu sync.Mutex
@@ -64,25 +71,35 @@ func NewProxy(
 	if routes == nil || dialer == nil {
 		return nil, fmt.Errorf("inbound %q: route manager and outbound dialer are required", inbound.Tag)
 	}
-	protocolDial := newProtocolDial(dialer)
+	ctx, cancel := context.WithCancel(context.Background())
+	initialized := false
+	defer func() {
+		if !initialized {
+			cancel()
+		}
+	}()
+	relay := func(down net.Conn, dr io.Reader, up net.Conn, ur io.Reader) error {
+		return core.RelayContext(ctx, down, dr, up, ur)
+	}
+	protocolDial := newProtocolDialWithContext(ctx, dialer)
 
 	var handler protocol.Handler
 	switch inbound.Protocol {
 	case "tcp":
 		var err error
-		handler, err = protocol.NewTCP(inbound, routes, protocolDial, core.Relay)
+		handler, err = protocol.NewTCP(inbound, routes, protocolDial, relay)
 		if err != nil {
 			return nil, err
 		}
 	case "http":
 		var err error
-		handler, err = protocol.NewHTTP(inbound, routes, protocolDial, core.Relay)
+		handler, err = protocol.NewHTTP(inbound, routes, protocolDial, relay)
 		if err != nil {
 			return nil, err
 		}
 	case "shadowsocks":
 		var err error
-		handler, err = protocol.NewShadowsocks(inbound, routes, protocolDial, core.Relay)
+		handler, err = protocol.NewShadowsocks(inbound, routes, protocolDial, relay)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +107,7 @@ func NewProxy(
 		return nil, fmt.Errorf("inbound %q: unsupported protocol %q", inbound.Tag, inbound.Protocol)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	initialized = true
 	return &Proxy{
 		inbound:        inbound,
 		accountManager: accounts,
@@ -99,39 +116,49 @@ func NewProxy(
 		traffic:        traffic.Register(inbound.Listen),
 		trafficMgr:     traffic,
 		stopCh:         make(chan struct{}),
+		serveDone:      make(chan struct{}),
 		ctx:            ctx,
 		cancel:         cancel,
 		connections:    make(map[net.Conn]struct{}),
 	}, nil
 }
 
-// Run 阻塞运行入站监听器，直到 Close 被调用或监听失败。
-func (p *Proxy) Run() {
+// Start synchronously binds the port, then serves in the background.
+// A closed Proxy cannot be restarted.
+func (p *Proxy) Start() error {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if p.closed {
+		return fmt.Errorf("inbound %s is closed", p.inbound.Tag)
+	}
+	if p.started {
+		return nil
+	}
 	listener, err := net.Listen("tcp", p.inbound.Listen)
 	if err != nil {
-		Logger.Errorf("listen %s (%s) failed: %v", p.inbound.Tag, p.inbound.Listen, err)
-		return
+		return fmt.Errorf("listen %s (%s): %w", p.inbound.Tag, p.inbound.Listen, err)
 	}
-	p.listenerMu.Lock()
-	select {
-	case <-p.stopCh:
-		p.listenerMu.Unlock()
-		_ = listener.Close()
-		return
-	default:
-		p.listener = listener
-	}
-	p.listenerMu.Unlock()
-	defer func() {
-		_ = listener.Close()
-		p.listenerMu.Lock()
-		if p.listener == listener {
-			p.listener = nil
-		}
-		p.listenerMu.Unlock()
-	}()
+	p.listener = listener
+	p.started = true
+	go p.serve(listener)
+	return nil
+}
 
-	Logger.Infof("inbound %s listening on %s", p.inbound.Tag, listener.Addr())
+// Run retains the blocking entry point for existing callers.
+func (p *Proxy) Run() {
+	if err := p.Start(); err != nil {
+		Logger.Errorf("%v", err)
+		return
+	}
+	if err := p.Wait(); err != nil {
+		Logger.Errorf("%v", err)
+	}
+}
+
+func (p *Proxy) serve(listener net.Listener) {
+	defer close(p.serveDone)
+	defer listener.Close()
+	var delay time.Duration
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -141,48 +168,96 @@ func (p *Proxy) Run() {
 			default:
 			}
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				Logger.Warnf("temporary accept failure on %s: %v", p.inbound.Tag, err)
+				if delay == 0 {
+					delay = 5 * time.Millisecond
+				} else {
+					delay *= 2
+				}
+				if delay > time.Second {
+					delay = time.Second
+				}
+				timer := time.NewTimer(delay)
+				select {
+				case <-p.stopCh:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
 				continue
 			}
-			Logger.Errorf("accept on %s failed: %v", p.inbound.Tag, err)
+			p.lifecycleMu.Lock()
+			p.runErr = fmt.Errorf("accept %s: %w", p.inbound.Tag, err)
+			p.lifecycleMu.Unlock()
+			go p.Close()
 			return
 		}
+		delay = 0
 		p.connectionsMu.Lock()
 		select {
 		case <-p.stopCh:
 			p.connectionsMu.Unlock()
-			_ = conn.Close()
+			conn.Close()
 			return
 		default:
 			p.connections[conn] = struct{}{}
+			p.workers.Add(1)
 		}
 		p.connectionsMu.Unlock()
 		go func(c net.Conn) {
-			defer func() {
-				_ = c.Close()
-				p.connectionsMu.Lock()
-				delete(p.connections, c)
-				p.connectionsMu.Unlock()
-			}()
+			defer p.workers.Done()
+			defer func() { c.Close(); p.connectionsMu.Lock(); delete(p.connections, c); p.connectionsMu.Unlock() }()
 			p.handleConnection(c)
 		}(conn)
 	}
 }
 
-// Close 停止监听，同时关闭当前活动连接；可以重复调用。
+// Wait reports a terminal accept error; shutdown errors are not failures.
+func (p *Proxy) Wait() error {
+	p.lifecycleMu.Lock()
+	started := p.started
+	p.lifecycleMu.Unlock()
+	if !started {
+		return fmt.Errorf("inbound has not started")
+	}
+	<-p.serveDone
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	return p.runErr
+}
+
+// Close stops acceptance, cancels sessions and waits for all handlers.
 func (p *Proxy) Close() {
 	if p == nil {
 		return
 	}
-	p.stopOnce.Do(func() { p.cancel(); close(p.stopCh) })
-	p.listenerMu.Lock()
-	if p.listener != nil {
-		_ = p.listener.Close()
-	}
-	p.listenerMu.Unlock()
-	p.connectionsMu.Lock()
-	for c := range p.connections {
-		_ = c.Close()
-	}
-	p.connectionsMu.Unlock()
+	p.closeOnce.Do(func() {
+		p.lifecycleMu.Lock()
+		p.closed = true
+		p.cancel()
+		close(p.stopCh)
+		started, listener := p.started, p.listener
+		p.lifecycleMu.Unlock()
+		if listener != nil {
+			listener.Close()
+		}
+		// No new workers can be added after serve has returned.
+		if started {
+			<-p.serveDone
+		}
+		p.connectionsMu.Lock()
+		conns := make([]net.Conn, 0, len(p.connections))
+		for c := range p.connections {
+			conns = append(conns, c)
+		}
+		p.connectionsMu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+		p.workers.Wait()
+		if closer, ok := p.handler.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				Logger.Errorf("close handler: %v", err)
+			}
+		}
+	})
 }

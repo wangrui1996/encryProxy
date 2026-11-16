@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"wangjui.com/enproxy/proxy/config"
+	"wangjui.com/enproxy/proxy/core"
 )
 
 // HTTPClient implements the HTTP upstream proxy transport (client side).
@@ -67,6 +68,8 @@ func (c HTTPClient) Connect(ctx context.Context, out *config.OutboundConfig, tar
 	if err != nil {
 		return nil, nil, err
 	}
+	stop := core.CloseOnCancel(ctx, upstream)
+	defer stop()
 	closeOnError := func(err error) (net.Conn, *bufio.Reader, error) { _ = upstream.Close(); return nil, nil, err }
 	if err := upstream.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		return closeOnError(err)

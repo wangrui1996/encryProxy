@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"wangjui.com/enproxy/proxy/config"
@@ -14,7 +15,13 @@ import (
 )
 
 type ProxyManager struct {
-	proxies []*Proxy
+	proxies   []*Proxy
+	mu        sync.Mutex
+	started   bool
+	closed    bool
+	closeOnce sync.Once
+	done      chan struct{}
+	runErr    error
 
 	accountManager *AccountManager
 	routeManager   *route.Manager
@@ -64,6 +71,7 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 
 	manager := &ProxyManager{
 		proxies:        make([]*Proxy, 0, len(cfg.Inbounds)),
+		done:           make(chan struct{}),
 		trafficManager: stat.NewManager(),
 	}
 
@@ -121,50 +129,124 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 	return manager, nil
 }
 
-// Start 启动统计、所有入站代理以及 Web 服务。
-func (manager *ProxyManager) Start() {
+// Start binds every required listener before reporting success. A failed start
+// rolls back all resources; construct a new manager to retry a failed/closed one.
+func (manager *ProxyManager) Start() error {
 	if manager == nil {
-		return
+		return fmt.Errorf("proxy manager is nil")
 	}
-
-	if manager.trafficManager != nil {
-		manager.trafficManager.Start()
+	manager.mu.Lock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return fmt.Errorf("proxy manager is closed")
 	}
-
+	if manager.started {
+		manager.mu.Unlock()
+		return nil
+	}
+	var startErr error
 	for _, p := range manager.proxies {
-		proxyInstance := p
-		go proxyInstance.Run()
+		if err := p.Start(); err != nil {
+			startErr = err
+			break
+		}
 	}
-
+	if startErr == nil && manager.webServer != nil {
+		startErr = manager.webServer.Start()
+	}
+	if startErr != nil {
+		manager.closed = true
+		manager.runErr = startErr
+		manager.mu.Unlock()
+		manager.Close()
+		return startErr
+	}
+	manager.trafficManager.Start()
+	manager.started = true
+	manager.mu.Unlock()
+	// Waiters do not participate in Close's worker join, avoiding self-deadlock.
+	for _, p := range manager.proxies {
+		p := p
+		go func() { manager.serviceExited(p.Wait()) }()
+	}
 	if manager.webServer != nil {
-		go manager.webServer.Run()
+		go func() { manager.serviceExited(manager.webServer.Wait()) }()
 	}
+	return nil
 }
 
-// Close 释放 ProxyManager 持有的全部运行时资源。
+func (manager *ProxyManager) serviceExited(err error) {
+	manager.mu.Lock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return
+	}
+	if err == nil {
+		err = fmt.Errorf("service stopped unexpectedly")
+	}
+	if manager.runErr == nil {
+		manager.runErr = err
+	}
+	manager.mu.Unlock()
+	manager.Close()
+}
+
+// Wait returns after resource cleanup, including when a runtime service fails.
+func (manager *ProxyManager) Wait() error {
+	if manager == nil {
+		return fmt.Errorf("proxy manager is nil")
+	}
+	manager.mu.Lock()
+	ready := manager.started || manager.closed
+	manager.mu.Unlock()
+	if !ready {
+		return fmt.Errorf("proxy manager has not started")
+	}
+	<-manager.done
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.runErr
+}
+
+// Close is idempotent; concurrent callers wait for the same cleanup operation.
 func (manager *ProxyManager) Close() {
 	if manager == nil {
 		return
 	}
-
-	if manager.webServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := manager.webServer.Shutdown(ctx); err != nil {
-			Logger.Errorf("shutdown web server failed: %v", err)
+	manager.closeOnce.Do(func() {
+		manager.mu.Lock()
+		manager.closed = true
+		manager.mu.Unlock()
+		// Cancel all inbounds first so a slow session cannot delay cancellation of others.
+		for _, p := range manager.proxies {
+			p.cancel()
 		}
-	}
-
-	// 先停止监听与连接，再关闭它们依赖的 DNS 和流量统计资源。
-	for _, p := range manager.proxies {
-		p.Close()
-	}
-	if manager.dnsResolver != nil {
-		manager.dnsResolver.Close()
-	}
-	if manager.trafficManager != nil {
-		manager.trafficManager.Close()
-	}
+		var stopped sync.WaitGroup
+		for _, p := range manager.proxies {
+			stopped.Add(1)
+			go func(p *Proxy) { defer stopped.Done(); p.Close() }(p)
+		}
+		stopped.Wait()
+		if manager.webServer != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := manager.webServer.Shutdown(ctx)
+			cancel()
+			if err != nil {
+				manager.mu.Lock()
+				if manager.runErr == nil {
+					manager.runErr = fmt.Errorf("shutdown web: %w", err)
+				}
+				manager.mu.Unlock()
+			}
+		}
+		if manager.dnsResolver != nil {
+			manager.dnsResolver.Close()
+		}
+		if manager.trafficManager != nil {
+			manager.trafficManager.Close()
+		}
+		close(manager.done)
+	})
 }
 
 func (manager *ProxyManager) Count() int {

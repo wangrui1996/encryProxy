@@ -18,11 +18,32 @@ func wrapCrypto(conn net.Conn, cfg *config.CryptoConfig) (net.Conn, error) {
 
 // newProtocolDial owns outbound connection/authentication/encryption once for all protocols.
 func newProtocolDial(dialer *OutboundDialer) protocol.DialFunc {
+	return newProtocolDialWithContext(context.Background(), dialer)
+}
+
+// Also cancel Transport-owned dial/handshake work when its inbound stops.
+func newProtocolDialWithContext(parent context.Context, dialer *OutboundDialer) protocol.DialFunc {
 	return func(ctx context.Context, out *config.OutboundConfig, address string) (net.Conn, error) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		ctx, cancel := context.WithCancel(ctx)
+		done, exited := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(exited)
+			select {
+			case <-parent.Done():
+				cancel()
+			case <-done:
+			}
+		}()
+		defer func() { close(done); cancel(); <-exited }()
 		conn, err := dialer.DialContext(ctx, address)
 		if err != nil {
 			return nil, err
 		}
+		stop := core.CloseOnCancel(ctx, conn)
+		defer stop()
 		if out == nil || out.Crypto == nil {
 			return conn, nil
 		}

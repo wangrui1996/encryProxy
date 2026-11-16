@@ -169,3 +169,13 @@ func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http
 	}
 	return !req.Close && !resp.Close, nil
 }
+
+// Close is called after sessions stop, so no new transports can be created.
+func (h *HTTP) Close() error {
+	h.transports.Range(func(key, value interface{}) bool {
+		value.(*http.Transport).CloseIdleConnections()
+		h.transports.Delete(key)
+		return true
+	})
+	return nil
+}

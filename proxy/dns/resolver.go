@@ -1,4 +1,3 @@
-
 package dns
 
 import (
@@ -36,6 +35,7 @@ type Resolver struct {
 	cache    map[string]dnsEntry
 	inflight map[string]*dnsCall
 
+	doneCh   chan struct{}
 	stopCh   chan struct{}
 	stopOnce sync.Once
 }
@@ -63,6 +63,7 @@ func NewResolver(cfg *config.DNSConfig) (*Resolver, error) {
 	r.cache = make(map[string]dnsEntry)
 	r.inflight = make(map[string]*dnsCall)
 	r.stopCh = make(chan struct{})
+	r.doneCh = make(chan struct{})
 
 	// 启动过期缓存自动清理。
 	go r.cleanupLoop()
@@ -72,6 +73,7 @@ func NewResolver(cfg *config.DNSConfig) (*Resolver, error) {
 
 // cleanupLoop 定期清理过期 DNS 缓存。
 func (r *Resolver) cleanupLoop() {
+	defer close(r.doneCh)
 	ticker := time.NewTicker(dnsCleanupInterval)
 	defer ticker.Stop()
 
@@ -112,6 +114,7 @@ func (r *Resolver) Close() {
 	r.stopOnce.Do(func() {
 		close(r.stopCh)
 	})
+	<-r.doneCh
 }
 
 func cloneIPAddrs(ips []net.IPAddr) []net.IPAddr {

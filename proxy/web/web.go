@@ -3,8 +3,11 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"wangjui.com/enproxy/proxy/common"
@@ -15,11 +18,19 @@ import (
 var Logger = common.Log
 
 type WebServer struct {
-	addr     string
-	traffic  *stat.Manager
-	inbounds []config.InboundConfig
-	accounts []config.AccountConfig
-	server   *http.Server
+	addr         string
+	traffic      *stat.Manager
+	inbounds     []config.InboundConfig
+	accounts     []config.AccountConfig
+	server       *http.Server
+	mu           sync.Mutex
+	started      bool
+	closed       bool
+	done         chan struct{}
+	runErr       error
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
+	shutdownErr  error
 }
 
 // InboundLimitInfo 保留旧字段，兼容现有 WebUI。
@@ -49,25 +60,14 @@ func NewWebServer(
 	inbounds []config.InboundConfig,
 	accounts []config.AccountConfig,
 ) *WebServer {
-	return &WebServer{
-		addr:     addr,
-		traffic:  traffic,
-		inbounds: append([]config.InboundConfig(nil), inbounds...),
-		accounts: append([]config.AccountConfig(nil), accounts...),
+	w := &WebServer{
+		done:         make(chan struct{}),
+		shutdownDone: make(chan struct{}),
+		addr:         addr,
+		traffic:      traffic,
+		inbounds:     append([]config.InboundConfig(nil), inbounds...),
+		accounts:     append([]config.AccountConfig(nil), accounts...),
 	}
-}
-
-func (w *WebServer) Run() {
-	if err := w.Start(); err != nil && err != http.ErrServerClosed {
-		Logger.Errorf("web server failed: %v", err)
-	}
-}
-
-func (w *WebServer) Start() error {
-	if w == nil || w.traffic == nil {
-		return fmt.Errorf("web server requires a traffic manager")
-	}
-
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", w.handleIndex)
@@ -84,17 +84,98 @@ func (w *WebServer) Start() error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	Logger.Infof("Web dashboard listening on http://%s", w.addr)
-
-	return w.server.ListenAndServe()
+	return w
 }
 
-func (w *WebServer) Shutdown(ctx context.Context) error {
-	if w == nil || w.server == nil {
+// Start binds synchronously and returns once the listener is ready.
+func (w *WebServer) Start() error {
+	if w == nil || w.traffic == nil {
+		return fmt.Errorf("web server requires a traffic manager")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("web server is closed")
+	}
+	if w.started {
 		return nil
 	}
+	listener, err := net.Listen("tcp", w.addr)
+	if err != nil {
+		return fmt.Errorf("listen web %s: %w", w.addr, err)
+	}
+	w.started = true
+	go func() {
+		err := w.server.Serve(listener)
+		w.mu.Lock()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			w.runErr = err
+		}
+		w.mu.Unlock()
+		close(w.done)
+	}()
+	return nil
+}
 
-	return w.server.Shutdown(ctx)
+// Run retains the original blocking entry point.
+func (w *WebServer) Run() {
+	if err := w.Start(); err != nil {
+		Logger.Errorf("web start: %v", err)
+		return
+	}
+	if err := w.Wait(); err != nil {
+		Logger.Errorf("web serve: %v", err)
+	}
+}
+
+func (w *WebServer) Wait() error {
+	w.mu.Lock()
+	started := w.started
+	w.mu.Unlock()
+	if !started {
+		return fmt.Errorf("web server has not started")
+	}
+	<-w.done
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.runErr
+}
+
+// Shutdown prevents future starts, drains requests, and force-closes on timeout.
+// Concurrent callers can independently stop waiting when their context expires.
+func (w *WebServer) Shutdown(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+	w.shutdownOnce.Do(func() {
+		go func() {
+			err := w.server.Shutdown(ctx)
+			if err != nil {
+				_ = w.server.Close()
+			}
+			w.mu.Lock()
+			started := w.started
+			w.mu.Unlock()
+			if started {
+				<-w.done
+			}
+			w.shutdownErr = err
+			close(w.shutdownDone)
+		}()
+	})
+	select {
+	case <-w.shutdownDone:
+		return w.shutdownErr
+	case <-ctx.Done():
+		_ = w.server.Close()
+		return ctx.Err()
+	}
 }
 
 func writeJSON(rw http.ResponseWriter, data interface{}) {

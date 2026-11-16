@@ -134,6 +134,7 @@ func (m *Manager) Close() {
 
     if m.closed {
         m.lifecycleMu.Unlock()
+        m.wg.Wait()
         return
     }
 
