@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"bufio"
+	"errors"
 )
 
 func parseProxyBasic(raw string) (string, string, bool) {
@@ -84,3 +86,78 @@ func writeProxyAuthRequired(conn net.Conn) error {
 	_, err := io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"enproxy\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 	return err
 }
+
+// maxHTTPHeaderBytes limits the request line and all header fields combined.
+// The request body and CONNECT tunnel data are not subject to this limit.
+const maxHTTPHeaderBytes = 64 * 1024
+
+var errHTTPHeaderTooLarge = errors.New("HTTP request header too large")
+
+// httpHeaderLimiter scans bytes while a request line/headers are being parsed.
+//
+// It sits *below* the persistent bufio.Reader. ReadRequest may read ahead into
+// the body or a CONNECT stream: scanning stops at the empty header line, but all
+// bytes remain available from the same bufio.Reader. For keep-alive requests,
+// beginRequest also scans bytes already buffered from an earlier read.
+//
+// A limiter belongs to one inbound connection and is not used concurrently.
+type httpHeaderLimiter struct {
+	source     io.Reader
+	maxBytes   int
+	headerSize int
+	previous   byte
+	beforePrev byte
+	inHeader   bool
+	tooLarge   bool
+}
+
+func newHTTPHeaderLimiter(source io.Reader, maxBytes int) *httpHeaderLimiter {
+	return &httpHeaderLimiter{source: source, maxBytes: maxBytes}
+}
+
+func (l *httpHeaderLimiter) beginRequest(reader *bufio.Reader) {
+	l.headerSize = 0
+	l.previous = 0
+	l.beforePrev = 0
+	l.inHeader = true
+	l.tooLarge = false
+
+	// Peek(Buffered()) never fetches more bytes from the connection.
+	// HTTP pipelining can leave the next request's header in this buffer.
+	if n := reader.Buffered(); n > 0 {
+		buffered, _ := reader.Peek(n)
+		l.scan(buffered)
+	}
+}
+
+func (l *httpHeaderLimiter) Read(p []byte) (int, error) {
+	if l.tooLarge {
+		return 0, errHTTPHeaderTooLarge
+	}
+	n, err := l.source.Read(p)
+	l.scan(p[:n])
+	return n, err
+}
+
+func (l *httpHeaderLimiter) scan(data []byte) {
+	if !l.inHeader || l.tooLarge {
+		return
+	}
+	for _, b := range data {
+		l.headerSize++
+		if l.headerSize > l.maxBytes {
+			l.tooLarge = true
+			return
+		}
+
+		// An empty HTTP header line ends with either LF LF, LF CR LF,
+		// or CR LF CR LF; Go's HTTP parser accepts LF-only lines too.
+		if b == '\n' && (l.previous == '\n' ||
+			(l.previous == '\r' && l.beforePrev == '\n')) {
+			l.inHeader = false
+			return
+		}
+		l.beforePrev, l.previous = l.previous, b
+	}
+}
+

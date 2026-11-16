@@ -38,12 +38,24 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	reader := bufio.NewReaderSize(conn, 32*1024)
+	limiter := newHTTPHeaderLimiter(conn, maxHTTPHeaderBytes)
+	reader := bufio.NewReaderSize(limiter, 32*1024)
 	for {
+		limiter.beginRequest(reader)
+		if limiter.tooLarge {
+			_ = writeHTTPError(conn, http.StatusRequestHeaderFieldsTooLarge)
+			return errHTTPHeaderTooLarge
+		}
 		// Deadline only covers the next request line/headers, not a streaming body.
 		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		req, err := http.ReadRequest(reader)
 		_ = conn.SetReadDeadline(time.Time{})
+		if limiter.tooLarge {
+			// Return without draining a potentially large or unbounded body.
+			// The caller closes the downstream connection when Handle returns.
+			_ = writeHTTPError(conn, http.StatusRequestHeaderFieldsTooLarge)
+			return fmt.Errorf("read HTTP proxy request: %w", errHTTPHeaderTooLarge)
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
