@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+
 	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
 	"wangjui.com/enproxy/proxy/protocol"
@@ -18,12 +19,22 @@ func wrapCrypto(conn net.Conn, cfg *config.CryptoConfig) (net.Conn, error) {
 	return core.NewCryptoConn(conn, cfg.Key)
 }
 
-// Also cancel Transport-owned dial/handshake work when its inbound stops.
-func newProtocolDialWithContext(parent context.Context, dialer *OutboundDialer) outboundDialFunc {
-	return func(ctx context.Context, out *config.OutboundConfig, address string) (net.Conn, error) {
+// newProtocolDialWithContext is the only outbound dialing injection point.
+// It performs the raw network dial, optional ENPA authentication and optional
+// outer AES-GCM wrapping. Protocol handlers only decide when and where to dial.
+func newProtocolDialWithContext(parent context.Context, dialer *OutboundDialer) protocol.DialFunc {
+	if parent == nil {
+		parent = context.Background()
+	}
+
+	return func(ctx context.Context, out *protocol.Outbound, address string) (net.Conn, error) {
+		if out == nil {
+			return nil, fmt.Errorf("outbound is nil")
+		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
+
 		ctx, cancel := context.WithCancel(ctx)
 		done, exited := make(chan struct{}), make(chan struct{})
 		go func() {
@@ -34,23 +45,33 @@ func newProtocolDialWithContext(parent context.Context, dialer *OutboundDialer) 
 			case <-done:
 			}
 		}()
-		defer func() { close(done); cancel(); <-exited }()
+		defer func() {
+			close(done)
+			cancel()
+			<-exited
+		}()
+
 		conn, err := dialer.DialContext(ctx, address)
 		if err != nil {
 			return nil, err
 		}
-		stop := core.CloseOnCancel(ctx, conn)
-		defer stop()
-		if out == nil || out.Crypto == nil {
+
+		crypto := protocolCryptoConfig(out.Crypto)
+		if crypto == nil {
 			return conn, nil
 		}
-		if out.Crypto.AuthRequired {
-			if err := authenticateOutbound(conn, out.Crypto); err != nil {
+
+		stop := core.CloseOnCancel(ctx, conn)
+		defer stop()
+
+		if crypto.AuthRequired {
+			if err := authenticateOutbound(conn, crypto); err != nil {
 				_ = conn.Close()
 				return nil, err
 			}
 		}
-		wrapped, err := wrapCrypto(conn, out.Crypto)
+
+		wrapped, err := wrapCrypto(conn, crypto)
 		if err != nil {
 			_ = conn.Close()
 			return nil, err
@@ -59,13 +80,9 @@ func newProtocolDialWithContext(parent context.Context, dialer *OutboundDialer) 
 	}
 }
 
-// outboundDialFunc is private to the assembly layer; config never crosses into protocol.
-type outboundDialFunc func(ctx context.Context, out *config.OutboundConfig, address string) (net.Conn, error)
-
 // protocolRoutes adapts route.Manager without changing the routing module's API.
 type protocolRoutes struct {
 	manager *route.Manager
-	dial    outboundDialFunc
 }
 
 func (r protocolRoutes) ResolveProxy(inboundTag, hostname string) (*protocol.Outbound, error) {
@@ -89,12 +106,36 @@ func (r protocolRoutes) outbound(out *config.OutboundConfig) *protocol.Outbound 
 		return nil
 	}
 	return &protocol.Outbound{
-		Tag: out.Tag, Protocol: out.Protocol, Server: out.Server,
+		Tag:         out.Tag,
+		Protocol:    out.Protocol,
+		Server:      out.Server,
+		Crypto:      protocolCryptoOptions(out.Crypto),
 		HTTP:        protocolHTTPOptions(out.HTTP),
 		Shadowsocks: protocolShadowsocksOptions(out.Shadowsocks),
-		DialContext: func(ctx context.Context, address string) (net.Conn, error) {
-			return r.dial(ctx, out, address)
-		},
+	}
+}
+
+func protocolCryptoOptions(cfg *config.CryptoConfig) *protocol.CryptoOptions {
+	if cfg == nil {
+		return nil
+	}
+	return &protocol.CryptoOptions{
+		Key:          cfg.Key,
+		AuthRequired: cfg.AuthRequired,
+		Account:      cfg.Account,
+		Passwd:       cfg.Passwd,
+	}
+}
+
+func protocolCryptoConfig(cfg *protocol.CryptoOptions) *config.CryptoConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &config.CryptoConfig{
+		Key:          cfg.Key,
+		AuthRequired: cfg.AuthRequired,
+		Account:      cfg.Account,
+		Passwd:       cfg.Passwd,
 	}
 }
 
@@ -114,11 +155,4 @@ func protocolShadowsocksOptions(cfg *config.ShadowsocksConfig) *protocol.Shadows
 
 func protocolInboundOptions(in config.InboundConfig) protocol.InboundOptions {
 	return protocol.InboundOptions{Tag: in.Tag, Protocol: in.Protocol, HTTP: protocolHTTPOptions(in.HTTP), Shadowsocks: protocolShadowsocksOptions(in.Shadowsocks)}
-}
-
-func dialProtocolOutbound(ctx context.Context, out *protocol.Outbound, address string) (net.Conn, error) {
-	if out == nil || out.DialContext == nil {
-		return nil, fmt.Errorf("outbound dialer is nil")
-	}
-	return out.DialContext(ctx, address)
 }

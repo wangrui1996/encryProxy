@@ -13,9 +13,9 @@ type Resolver interface {
 	ResolveProxy(inboundTag, hostname string) (*Outbound, error)
 }
 
-// DialFunc opens an outbound stream. The assembly layer owns dialing, optional
-// AES-GCM framing and ENPA authentication. For freedom, address is the target.
-// For an HTTP outbound, address is the HTTP upstream's server.
+// DialFunc opens one outbound stream. The assembly layer owns network dialing,
+// optional AES-GCM framing and ENPA authentication. For freedom, address is
+// the target; for HTTP and Shadowsocks outbounds, it is the upstream server.
 type DialFunc func(ctx context.Context, outbound *Outbound, address string) (net.Conn, error)
 
 // RelayFunc forwards a full-duplex stream; core supplies the implementation.
@@ -52,14 +52,22 @@ type ShadowsocksOptions struct {
 	Password string
 }
 
-// Outbound is a runtime route result. DialContext is bound by the assembly layer
-// to the selected outbound's outer encryption/authentication settings.
-// Treat this descriptor as immutable once returned by a resolver.
+// CryptoOptions describes the optional outer transport encryption and
+// authentication performed by the assembly-layer DialFunc.
+type CryptoOptions struct {
+	Key          string
+	AuthRequired bool
+	Account      string
+	Passwd       string
+}
+
+// Outbound is immutable runtime route data. It contains no dial callback;
+// protocol handlers receive the single DialFunc dependency separately.
 type Outbound struct {
 	Tag         string
 	Protocol    string
 	Server      string
+	Crypto      *CryptoOptions
 	HTTP        *HTTPOptions
 	Shadowsocks *ShadowsocksOptions
-	DialContext func(ctx context.Context, address string) (net.Conn, error)
 }

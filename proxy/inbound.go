@@ -75,26 +75,30 @@ func NewProxy(inbound config.InboundConfig, accounts *AccountManager, routes *ro
 	relay := func(down net.Conn, dr io.Reader, up net.Conn, ur io.Reader) error {
 		return core.RelayContext(ctx, down, dr, up, ur)
 	}
-	protocolResolver := protocolRoutes{manager: routes, dial: newProtocolDialWithContext(ctx, dialer)}
+
+	// Routing only selects an outbound. A single DialFunc performs all
+	// outbound dialing and transport setup for every protocol handler.
+	protocolResolver := protocolRoutes{manager: routes}
+	protocolDial := newProtocolDialWithContext(ctx, dialer)
 	protocolIn := protocolInboundOptions(inbound)
 
 	var handler protocol.Handler
 	switch inbound.Protocol {
 	case "tcp":
 		var err error
-		handler, err = protocol.NewTCP(protocolIn, protocolResolver, dialProtocolOutbound, relay)
+		handler, err = protocol.NewTCP(protocolIn, protocolResolver, protocolDial, relay)
 		if err != nil {
 			return nil, err
 		}
 	case "http":
 		var err error
-		handler, err = protocol.NewHTTP(protocolIn, protocolResolver, dialProtocolOutbound, relay)
+		handler, err = protocol.NewHTTP(protocolIn, protocolResolver, protocolDial, relay)
 		if err != nil {
 			return nil, err
 		}
 	case "shadowsocks":
 		var err error
-		handler, err = protocol.NewShadowsocks(protocolIn, protocolResolver, dialProtocolOutbound, relay)
+		handler, err = protocol.NewShadowsocks(protocolIn, protocolResolver, protocolDial, relay)
 		if err != nil {
 			return nil, err
 		}
