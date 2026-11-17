@@ -33,9 +33,6 @@ func copyWithBuffer(dst io.Writer, src io.Reader) (int64, error) {
 	return io.CopyBuffer(dst, src, buf)
 }
 
-// Relay copies both directions, preserving buffered bytes and
-// TCP half-close.
-//
 // 使用全局缓冲池，避免每次创建连接都分配新的复制缓冲区。
 func Relay(downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error {
 	return RelayContext(context.Background(), downstream, downReader, upstream, upReader)
@@ -81,21 +78,12 @@ func RelayContext(ctx context.Context, downstream net.Conn, downReader io.Reader
 			return
 		}
 
-		// 正常 EOF，尽可能保留 TCP 半关闭语义。
-		closeWrite(dst)
+		closeWrite(dst) // 正常 EOF，尽可能保留 TCP 半关闭语义。
 	}
 
-	go copyOne(
-		upstream,
-		downReader,
-		"client -> target",
-	)
+	go copyOne(upstream, downReader, "client -> target")
 
-	go copyOne(
-		downstream,
-		upReader,
-		"target -> client",
-	)
+	go copyOne(downstream, upReader, "target -> client")
 
 	wg.Wait()
 	close(errs)
