@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+	"wangjui.com/enproxy/proxy/core"
 )
 
 // HTTP implements the inbound HTTP forward proxy: ordinary HTTP requests
@@ -44,8 +46,15 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 			_ = writeHTTPError(conn, http.StatusRequestHeaderFieldsTooLarge)
 			return errHTTPHeaderTooLarge
 		}
-		// Deadline only covers the next request line/headers, not a streaming body.
-		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		// Wait for the next request separately from parsing its headers.
+		_ = conn.SetReadDeadline(time.Now().Add(httpIdleTimeout))
+		if _, err := reader.Peek(1); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("wait for HTTP request: %w", err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(httpHeaderTimeout))
 		req, err := http.ReadRequest(reader)
 		_ = conn.SetReadDeadline(time.Time{})
 		if limiter.tooLarge {
@@ -66,6 +75,16 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 			if !ok || authenticate == nil || authenticate(username, password) != nil {
 				// Do not drain an unauthenticated request body.
 				_ = writeProxyAuthRequired(conn)
+				return nil
+			}
+		}
+		if req.Header.Get("Upgrade") != "" || hasHTTPToken(req.Header, "Connection", "upgrade") {
+			_ = writeHTTPError(conn, http.StatusNotImplemented)
+			return nil
+		}
+		for _, value := range req.Header.Values("Expect") {
+			if !strings.EqualFold(strings.TrimSpace(value), "100-continue") || req.Method == http.MethodConnect {
+				_ = writeHTTPError(conn, http.StatusExpectationFailed)
 				return nil
 			}
 		}
@@ -122,8 +141,15 @@ func (h *HTTP) getTransport(out *Outbound) (*http.Transport, error) {
 	switch out.Protocol {
 	case "freedom":
 		tr = &http.Transport{
-			DialContext:  func(ctx context.Context, _, address string) (net.Conn, error) { return h.Dial(ctx, out, address) },
-			MaxIdleConns: 64, MaxIdleConnsPerHost: 16,
+			DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+				conn, err := h.Dial(ctx, out, address)
+				if err != nil {
+					return nil, err
+				}
+				return &httpStallConn{Conn: conn, timeout: httpStallTimeout}, nil
+			},
+			MaxResponseHeaderBytes: maxHTTPResponseHeaderBytes,
+			MaxIdleConns:           64, MaxIdleConnsPerHost: 16,
 			IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
 			ResponseHeaderTimeout: 30 * time.Second, DisableCompression: true,
 			ForceAttemptHTTP2: true,
@@ -139,9 +165,14 @@ func (h *HTTP) getTransport(out *Outbound) (*http.Transport, error) {
 		// HTTPS URLs negotiate TLS with the destination through this stream.
 		tr = &http.Transport{
 			DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
-				return (ShadowsocksClient{Dial: h.Dial}).Connect(ctx, out, address)
+				conn, err := (ShadowsocksClient{Dial: h.Dial}).Connect(ctx, out, address)
+				if err != nil {
+					return nil, err
+				}
+				return &httpStallConn{Conn: conn, timeout: httpStallTimeout}, nil
 			},
-			MaxIdleConns: 64, MaxIdleConnsPerHost: 16,
+			MaxResponseHeaderBytes: maxHTTPResponseHeaderBytes,
+			MaxIdleConns:           64, MaxIdleConnsPerHost: 16,
 			IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
 			ResponseHeaderTimeout: 30 * time.Second, DisableCompression: true,
 		}
@@ -162,7 +193,24 @@ func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http
 		_ = writeHTTPError(downstream, http.StatusBadGateway)
 		return false, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := core.CloseOnCancel(ctx, downstream)
+	defer stop()
+	abort := func() { cancel(); _ = downstream.Close() }
+	downstreamIO := &httpStallConn{Conn: downstream, timeout: httpStallTimeout}
+	if hasHTTPToken(req.Header, "Expect", "100-continue") && req.Body != nil && req.Body != http.NoBody {
+		if _, err := io.WriteString(downstreamIO, "HTTP/1.1 100 Continue\r\n\r\n"); err != nil {
+			return false, err
+		}
+	}
 	outReq := req.Clone(ctx)
+	outReq.Header.Del("Expect")
+	var requestBody *httpBodyReader
+	if req.Body != nil && req.Body != http.NoBody {
+		requestBody = &httpBodyReader{source: req.Body, abort: abort, timeout: httpStallTimeout, remaining: req.ContentLength, request: true}
+		outReq.Body = requestBody
+	}
 	outReq.RequestURI = ""
 	outReq.Host = outReq.URL.Host
 	// Do not leak downstream proxy credentials or hop-by-hop headers upstream.
@@ -173,11 +221,33 @@ func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http
 		return false, fmt.Errorf("HTTP forward %s: %w", req.URL, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		_ = writeHTTPError(downstream, http.StatusBadGateway)
+		return false, fmt.Errorf("unexpected HTTP upgrade from upstream")
+	}
+	// An early response may arrive before the request body has been consumed.
+	// Do not parse another request from the same reader in that case.
+	keepAlive := !req.Close && !resp.Close && (requestBody == nil || requestBody.complete.Load())
+	if !keepAlive {
+		resp.Close = true
+	}
+	// Transport may negotiate HTTP/2 upstream; downstream is HTTP/1.x.
+	resp.Proto, resp.ProtoMajor, resp.ProtoMinor = req.Proto, req.ProtoMajor, req.ProtoMinor
+	if req.ProtoMinor == 0 {
+		resp.TransferEncoding = nil
+		if resp.ContentLength < 0 {
+			resp.Close = true
+			keepAlive = false
+		}
+	} else if resp.ContentLength < 0 && req.Method != http.MethodHead && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotModified {
+		resp.TransferEncoding = []string{"chunked"}
+	}
+	resp.Body = &httpBodyReader{source: resp.Body, abort: abort, timeout: httpStallTimeout, remaining: -1}
 	stripHopHeaders(resp.Header)
-	if err := resp.Write(downstream); err != nil {
+	if err := resp.Write(downstreamIO); err != nil {
 		return false, fmt.Errorf("write HTTP proxy response: %w", err)
 	}
-	return !req.Close && !resp.Close, nil
+	return keepAlive, nil
 }
 
 // Close is called after sessions stop, so no new transports can be created.

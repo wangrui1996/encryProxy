@@ -42,15 +42,20 @@ func (c HTTPClient) Transport(out *Outbound) (*http.Transport, error) {
 	return &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
 		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
-			return c.Dial(ctx, out, address)
+			conn, err := c.Dial(ctx, out, address)
+			if err != nil {
+				return nil, err
+			}
+			return &httpStallConn{Conn: conn, timeout: httpStallTimeout}, nil
 		},
-		MaxIdleConns:          64,
-		MaxIdleConnsPerHost:   16,
-		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		DisableCompression:    true,
-		ForceAttemptHTTP2:     true,
+		MaxResponseHeaderBytes: maxHTTPResponseHeaderBytes,
+		MaxIdleConns:           64,
+		MaxIdleConnsPerHost:    16,
+		IdleConnTimeout:        60 * time.Second,
+		TLSHandshakeTimeout:    10 * time.Second,
+		ResponseHeaderTimeout:  30 * time.Second,
+		DisableCompression:     true,
+		ForceAttemptHTTP2:      true,
 	}, nil
 }
 
@@ -87,8 +92,7 @@ func (c HTTPClient) Connect(ctx context.Context, out *Outbound, target string) (
 	if err := req.Write(upstream); err != nil {
 		return closeOnError(fmt.Errorf("write CONNECT request: %w", err))
 	}
-	reader := bufio.NewReader(upstream)
-	resp, err := http.ReadResponse(reader, req)
+	resp, reader, err := readConnectResponse(upstream, req)
 	if err != nil {
 		return closeOnError(fmt.Errorf("read CONNECT response: %w", err))
 	}
