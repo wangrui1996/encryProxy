@@ -28,6 +28,7 @@ type DNSConfig struct {
 type WebConfig struct {
 	Enabled bool   `json:"enabled"`
 	Listen  string `json:"listen"`
+	User    string `json:"user"`
 	Passwd  string `json:"passwd"`
 }
 

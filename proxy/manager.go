@@ -117,12 +117,7 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 	// WebServer 在构造阶段创建，Start 仅负责启动。
 	// 未启用 Web 时保持 nil，不创建 HTTP 服务。
 	if cfg.Web.Enabled {
-		manager.webServer = web.NewWebServer(
-			cfg.Web.Listen,
-			manager.trafficManager,
-			append([]config.InboundConfig(nil), cfg.Inbounds...),
-			append([]config.AccountConfig(nil), cfg.Accounts...),
-		)
+		manager.webServer = web.NewWebServer(cfg.Web, manager.trafficManager, append([]config.InboundConfig(nil), cfg.Inbounds...), append([]config.AccountConfig(nil), cfg.Accounts...))
 	}
 
 	initialized = true
