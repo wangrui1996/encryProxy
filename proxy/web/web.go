@@ -54,12 +54,7 @@ type AccountLimitInfo struct {
 	RateLimit    config.RateLimitConfig `json:"rate_limit"`
 }
 
-func NewWebServer(
-	addr string,
-	traffic *stat.Manager,
-	inbounds []config.InboundConfig,
-	accounts []config.AccountConfig,
-) *WebServer {
+func NewWebServer(addr string, traffic *stat.Manager, inbounds []config.InboundConfig, accounts []config.AccountConfig) *WebServer {
 	w := &WebServer{
 		done:         make(chan struct{}),
 		shutdownDone: make(chan struct{}),
@@ -189,10 +184,7 @@ func writeJSON(rw http.ResponseWriter, data interface{}) {
 	}
 }
 
-func (w *WebServer) handleIndex(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(rw, r)
 		return
@@ -204,45 +196,27 @@ func (w *WebServer) handleIndex(
 	_, _ = rw.Write([]byte(webUI))
 }
 
-func (w *WebServer) handleSummary(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleSummary(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, w.traffic.GetSummary())
 }
 
-func (w *WebServer) handleRealtime(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleRealtime(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, w.traffic.GetRealtime())
 }
 
-func (w *WebServer) handleHourly(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleHourly(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, w.traffic.GetHourlyHistory())
 }
 
-func (w *WebServer) handleDaily(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleDaily(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, w.traffic.GetDailyHistory())
 }
 
-func (w *WebServer) handleMonthly(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleMonthly(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, w.traffic.GetMonthlyHistory())
 }
 
-func (w *WebServer) handleLimits(
-	rw http.ResponseWriter,
-	r *http.Request,
-) {
+func (w *WebServer) handleLimits(rw http.ResponseWriter, r *http.Request) {
 	inbounds := make([]InboundLimitInfo, 0, len(w.inbounds))
 
 	for _, in := range w.inbounds {

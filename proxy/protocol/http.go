@@ -10,21 +10,19 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	"wangjui.com/enproxy/proxy/config"
 )
 
 // HTTP implements the inbound HTTP forward proxy: ordinary HTTP requests
 // and HTTPS CONNECT tunnels. No TLS interception is performed.
 type HTTP struct {
-	Inbound    config.InboundConfig
+	Inbound    InboundOptions
 	Routes     Resolver
 	Dial       DialFunc
 	Relay      RelayFunc
 	transports sync.Map // map[OutboundTag]*http.Transport, shared by concurrent sessions
 }
 
-func NewHTTP(in config.InboundConfig, routes Resolver, dial DialFunc, relay RelayFunc) (*HTTP, error) {
+func NewHTTP(in InboundOptions, routes Resolver, dial DialFunc, relay RelayFunc) (*HTTP, error) {
 	if in.Protocol != "http" || in.HTTP == nil {
 		return nil, fmt.Errorf("HTTP inbound config required")
 	}
@@ -103,7 +101,7 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 }
 
 // handleConnect tunnels TLS without inspecting or modifying the encrypted application data.
-func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstreamReader *bufio.Reader, outbound *config.OutboundConfig, target string) error {
+func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstreamReader *bufio.Reader, outbound *Outbound, target string) error {
 	upstream, upstreamReader, err := connectTarget(ctx, h.Dial, outbound, target)
 	if err != nil {
 		_ = writeHTTPError(downstream, http.StatusBadGateway)
@@ -116,7 +114,7 @@ func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstrea
 	return h.Relay(downstream, downstreamReader, upstream, upstreamReader)
 }
 
-func (h *HTTP) getTransport(out *config.OutboundConfig) (*http.Transport, error) {
+func (h *HTTP) getTransport(out *Outbound) (*http.Transport, error) {
 	if item, ok := h.transports.Load(out.Tag); ok {
 		return item.(*http.Transport), nil
 	}
@@ -158,7 +156,7 @@ func (h *HTTP) getTransport(out *config.OutboundConfig) (*http.Transport, error)
 	return tr, nil
 }
 
-func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http.Request, outbound *config.OutboundConfig) (bool, error) {
+func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http.Request, outbound *Outbound) (bool, error) {
 	tr, err := h.getTransport(outbound)
 	if err != nil {
 		_ = writeHTTPError(downstream, http.StatusBadGateway)

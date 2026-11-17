@@ -37,12 +37,7 @@ func copyWithBuffer(dst io.Writer, src io.Reader) (int64, error) {
 // TCP half-close.
 //
 // 使用全局缓冲池，避免每次创建连接都分配新的复制缓冲区。
-func Relay(
-	downstream net.Conn,
-	downReader io.Reader,
-	upstream net.Conn,
-	upReader io.Reader,
-) error {
+func Relay(downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error {
 	return RelayContext(context.Background(), downstream, downReader, upstream, upReader)
 }
 
@@ -69,11 +64,7 @@ func RelayContext(ctx context.Context, downstream net.Conn, downReader io.Reader
 
 	errs := make(chan error, 2)
 
-	copyOne := func(
-		dst net.Conn,
-		src io.Reader,
-		label string,
-	) {
+	copyOne := func(dst net.Conn, src io.Reader, label string) {
 		defer wg.Done()
 
 		// 从缓冲池获取 buf，复制完成后自动归还。

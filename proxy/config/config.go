@@ -117,8 +117,7 @@ func (cfg *Config) validateReferences() error {
 			}
 			routed[tag] = true
 			if (route.Type == "relay") != (inbound.Protocol == "tcp") {
-				return fmt.Errorf("route[%d] type %q does not match inbound %q protocol %q",
-					i, route.Type, tag, inbound.Protocol)
+				return fmt.Errorf("route[%d] type %q does not match inbound %q protocol %q", i, route.Type, tag, inbound.Protocol)
 			}
 		}
 

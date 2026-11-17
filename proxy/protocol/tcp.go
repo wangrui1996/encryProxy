@@ -4,25 +4,23 @@ import (
 	"context"
 	"fmt"
 	"net"
-
-	"wangjui.com/enproxy/proxy/config"
 )
 
 // RelayResolver only exposes the fixed-target TCP route needed by this handler.
 type RelayResolver interface {
-	ResolveRelay(inboundTag string) (*config.OutboundConfig, error)
+	ResolveRelay(inboundTag string) (*Outbound, error)
 }
 
 // TCP handles only the TCP protocol-specific routing and outbound connection.
 // The byte forwarding implementation is injected from core by the assembly layer.
 type TCP struct {
-	inbound       config.InboundConfig
+	inbound       InboundOptions
 	routeResolver RelayResolver
 	dial          DialFunc
 	relay         RelayFunc
 }
 
-func NewTCP(inbound config.InboundConfig, routes RelayResolver, dial DialFunc, relay RelayFunc) (*TCP, error) {
+func NewTCP(inbound InboundOptions, routes RelayResolver, dial DialFunc, relay RelayFunc) (*TCP, error) {
 	if inbound.Protocol != "tcp" || routes == nil || dial == nil || relay == nil {
 		return nil, fmt.Errorf("TCP inbound requires tcp protocol, route resolver, dialer and relay")
 	}

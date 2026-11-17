@@ -52,9 +52,7 @@ func DecodeAuthRequest(payload []byte) (*AuthRequest, error) {
 		return nil, fmt.Errorf("invalid authentication request header")
 	}
 	if payload[4] != authVersion || payload[5] != authRequestType {
-		return nil, fmt.Errorf(
-			"unsupported authentication request version or type",
-		)
+		return nil, fmt.Errorf("unsupported authentication request version or type")
 	}
 
 	usernameLen := int(binary.BigEndian.Uint16(payload[6:8]))
@@ -94,9 +92,7 @@ func DecodeAuthResponse(payload []byte) error {
 		return fmt.Errorf("invalid authentication response")
 	}
 	if payload[4] != authVersion || payload[5] != authReplyType {
-		return fmt.Errorf(
-			"unsupported authentication response version or type",
-		)
+		return fmt.Errorf("unsupported authentication response version or type")
 	}
 	if payload[6] != authOK {
 		return fmt.Errorf("authentication rejected")
@@ -107,10 +103,7 @@ func DecodeAuthResponse(payload []byte) error {
 
 // 明文模式：4 字节大端长度 + Payload。
 // 加密模式：复用项目现有 AES-GCM CryptoCodec。
-func readAuthFrame(
-	conn net.Conn,
-	crypto *config.CryptoConfig,
-) ([]byte, error) {
+func readAuthFrame(conn net.Conn, crypto *config.CryptoConfig) ([]byte, error) {
 	if crypto != nil {
 		codec, err := core.NewCodec(true, crypto.Key)
 		if err != nil {
@@ -133,33 +126,20 @@ func readAuthFrame(
 
 	length := binary.BigEndian.Uint32(header[:])
 	if length == 0 || length > maxAuthPayload {
-		return nil, fmt.Errorf(
-			"invalid authentication frame size: %d",
-			length,
-		)
+		return nil, fmt.Errorf("invalid authentication frame size: %d", length)
 	}
 
 	payload := make([]byte, int(length))
 	if _, err := io.ReadFull(conn, payload); err != nil {
-		return nil, fmt.Errorf(
-			"read authentication payload: %w",
-			err,
-		)
+		return nil, fmt.Errorf("read authentication payload: %w", err)
 	}
 
 	return payload, nil
 }
 
-func writeAuthFrame(
-	conn net.Conn,
-	payload []byte,
-	crypto *config.CryptoConfig,
-) error {
+func writeAuthFrame(conn net.Conn, payload []byte, crypto *config.CryptoConfig) error {
 	if len(payload) == 0 || len(payload) > maxAuthPayload {
-		return fmt.Errorf(
-			"invalid authentication payload size: %d",
-			len(payload),
-		)
+		return fmt.Errorf("invalid authentication payload size: %d", len(payload))
 	}
 
 	if crypto != nil {
@@ -189,10 +169,7 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 	}
 
 	if err := conn.SetDeadline(time.Now().Add(authTimeout)); err != nil {
-		return nil, fmt.Errorf(
-			"set authentication deadline: %w",
-			err,
-		)
+		return nil, fmt.Errorf("set authentication deadline: %w", err)
 	}
 	defer conn.SetDeadline(time.Time{})
 
@@ -221,10 +198,7 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 			EncodeAuthResponse(false),
 			p.inbound.Crypto,
 		); err != nil {
-			return nil, fmt.Errorf(
-				"authentication rejected and response write failed: %w",
-				err,
-			)
+			return nil, fmt.Errorf("authentication rejected and response write failed: %w", err)
 		}
 		return nil, fmt.Errorf("authentication failed")
 	}
@@ -238,29 +212,20 @@ func (p *Proxy) authenticate(conn net.Conn) (*Account, error) {
 		EncodeAuthResponse(true),
 		p.inbound.Crypto,
 	); err != nil {
-		return nil, fmt.Errorf(
-			"write authentication response: %w",
-			err,
-		)
+		return nil, fmt.Errorf("write authentication response: %w", err)
 	}
 
 	return account, nil
 }
 
 // authenticateOutbound 向上游发送认证请求并验证响应。
-func authenticateOutbound(
-	conn net.Conn,
-	crypto *config.CryptoConfig,
-) error {
+func authenticateOutbound(conn net.Conn, crypto *config.CryptoConfig) error {
 	if crypto == nil || !crypto.AuthRequired {
 		return nil
 	}
 
 	if err := conn.SetDeadline(time.Now().Add(authTimeout)); err != nil {
-		return fmt.Errorf(
-			"set outbound authentication deadline: %w",
-			err,
-		)
+		return fmt.Errorf("set outbound authentication deadline: %w", err)
 	}
 	defer conn.SetDeadline(time.Time{})
 

@@ -26,10 +26,7 @@ func NewOutboundDialer(resolver *dns.Resolver) *OutboundDialer {
 	}
 }
 
-func (d *OutboundDialer) DialContext(
-	ctx context.Context,
-	address string,
-) (net.Conn, error) {
+func (d *OutboundDialer) DialContext(ctx context.Context, address string) (net.Conn, error) {
 	if d == nil || d.resolver == nil {
 		return nil, fmt.Errorf("outbound dialer is not initialized")
 	}
@@ -40,11 +37,7 @@ func (d *OutboundDialer) DialContext(
 
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"invalid outbound address %q: %w",
-			address,
-			err,
-		)
+		return nil, fmt.Errorf("invalid outbound address %q: %w", address, err)
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
@@ -87,11 +80,7 @@ func (d *OutboundDialer) DialContext(
 			return conn, nil
 		}
 
-		lastErr = fmt.Errorf(
-			"connect %s failed: %w",
-			target,
-			dialErr,
-		)
+		lastErr = fmt.Errorf("connect %s failed: %w", target, dialErr)
 
 		if dialCtx.Err() != nil {
 			break
@@ -102,9 +91,5 @@ func (d *OutboundDialer) DialContext(
 		lastErr = fmt.Errorf("no available IP")
 	}
 
-	return nil, fmt.Errorf(
-		"outbound %q connection failed: %w",
-		address,
-		lastErr,
-	)
+	return nil, fmt.Errorf("outbound %q connection failed: %w", address, lastErr)
 }

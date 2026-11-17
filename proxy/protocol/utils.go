@@ -8,13 +8,11 @@ import (
 	"net"
 	"strconv"
 	"strings"
-
-	"wangjui.com/enproxy/proxy/config"
 )
 
 // connectTarget is shared by HTTP CONNECT and Shadowsocks inbound traffic.
 // Returns the data reader separately to preserve HTTP CONNECT buffered bytes.
-func connectTarget(ctx context.Context, dial DialFunc, out *config.OutboundConfig, target string) (net.Conn, io.Reader, error) {
+func connectTarget(ctx context.Context, dial DialFunc, out *Outbound, target string) (net.Conn, io.Reader, error) {
 	if out == nil {
 		return nil, nil, fmt.Errorf("outbound is nil")
 	}

@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
 )
 
@@ -14,7 +13,7 @@ import (
 // standard encrypted destination header. No separate user/password exchange.
 type ShadowsocksClient struct{ Dial DialFunc }
 
-func (c ShadowsocksClient) Connect(ctx context.Context, out *config.OutboundConfig, target string) (net.Conn, error) {
+func (c ShadowsocksClient) Connect(ctx context.Context, out *Outbound, target string) (net.Conn, error) {
 	if out == nil || out.Protocol != "shadowsocks" || out.Shadowsocks == nil {
 		return nil, fmt.Errorf("invalid Shadowsocks outbound")
 	}

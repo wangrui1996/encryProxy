@@ -48,13 +48,7 @@ type Proxy struct {
 
 // NewProxy 使用 ProxyManager 创建的具体组件组装一个入站监听器。
 // 根包不再维护 Dependencies 聚合结构或额外的依赖接口。
-func NewProxy(
-	inbound config.InboundConfig,
-	accounts *AccountManager,
-	routes *route.Manager,
-	dialer *OutboundDialer,
-	traffic *stat.Manager,
-) (*Proxy, error) {
+func NewProxy(inbound config.InboundConfig, accounts *AccountManager, routes *route.Manager, dialer *OutboundDialer, traffic *stat.Manager) (*Proxy, error) {
 	if err := inbound.Validate(); err != nil {
 		return nil, fmt.Errorf("inbound %q: %w", inbound.Tag, err)
 	}
@@ -81,25 +75,26 @@ func NewProxy(
 	relay := func(down net.Conn, dr io.Reader, up net.Conn, ur io.Reader) error {
 		return core.RelayContext(ctx, down, dr, up, ur)
 	}
-	protocolDial := newProtocolDialWithContext(ctx, dialer)
+	protocolResolver := protocolRoutes{manager: routes, dial: newProtocolDialWithContext(ctx, dialer)}
+	protocolIn := protocolInboundOptions(inbound)
 
 	var handler protocol.Handler
 	switch inbound.Protocol {
 	case "tcp":
 		var err error
-		handler, err = protocol.NewTCP(inbound, routes, protocolDial, relay)
+		handler, err = protocol.NewTCP(protocolIn, protocolResolver, dialProtocolOutbound, relay)
 		if err != nil {
 			return nil, err
 		}
 	case "http":
 		var err error
-		handler, err = protocol.NewHTTP(inbound, routes, protocolDial, relay)
+		handler, err = protocol.NewHTTP(protocolIn, protocolResolver, dialProtocolOutbound, relay)
 		if err != nil {
 			return nil, err
 		}
 	case "shadowsocks":
 		var err error
-		handler, err = protocol.NewShadowsocks(inbound, routes, protocolDial, relay)
+		handler, err = protocol.NewShadowsocks(protocolIn, protocolResolver, dialProtocolOutbound, relay)
 		if err != nil {
 			return nil, err
 		}

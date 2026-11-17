@@ -6,21 +6,20 @@ import (
 	"net"
 	"time"
 
-	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
 )
 
 // Shadowsocks is an inbound classic AEAD Shadowsocks TCP server.
 // Routing is shared with HTTP; UDP ASSOCIATE/relay is a separate feature.
 type Shadowsocks struct {
-	Inbound config.InboundConfig
+	Inbound InboundOptions
 	Routes  Resolver
 	Dial    DialFunc
 	Relay   RelayFunc
 	cipher  *core.ShadowsocksCipher
 }
 
-func NewShadowsocks(in config.InboundConfig, routes Resolver, dial DialFunc, relay RelayFunc) (*Shadowsocks, error) {
+func NewShadowsocks(in InboundOptions, routes Resolver, dial DialFunc, relay RelayFunc) (*Shadowsocks, error) {
 	if in.Protocol != "shadowsocks" || in.Shadowsocks == nil {
 		return nil, fmt.Errorf("Shadowsocks inbound config required")
 	}

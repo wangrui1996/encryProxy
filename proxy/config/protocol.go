@@ -35,12 +35,7 @@ func (c *ShadowsocksConfig) Validate() error {
 	return nil
 }
 
-func validateProtocol(
-	protocol string,
-	http *HTTPConfig,
-	shadowsocks *ShadowsocksConfig,
-	outbound bool,
-) error {
+func validateProtocol(protocol string, http *HTTPConfig, shadowsocks *ShadowsocksConfig, outbound bool) error {
 	switch protocol {
 	case "tcp":
 		if http != nil || shadowsocks != nil {

@@ -12,11 +12,7 @@ type TrafficConn struct {
 	userTraffic atomic.Pointer[Traffic]
 }
 
-func NewTrafficConn(
-	conn net.Conn,
-	portTraffic *Traffic,
-	userTraffic *Traffic,
-) *TrafficConn {
+func NewTrafficConn(conn net.Conn, portTraffic *Traffic, userTraffic *Traffic) *TrafficConn {
 	c := &TrafficConn{Conn: conn, portTraffic: portTraffic}
 	c.userTraffic.Store(userTraffic)
 	return c

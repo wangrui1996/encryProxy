@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"time"
 
-	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
 )
 
@@ -18,7 +17,7 @@ import (
 // Its Dial must be provided by core, so optional encrypted outer transport works.
 type HTTPClient struct{ Dial DialFunc }
 
-func (c HTTPClient) proxyURL(out *config.OutboundConfig) (*url.URL, error) {
+func (c HTTPClient) proxyURL(out *Outbound) (*url.URL, error) {
 	if out == nil || out.Protocol != "http" || out.HTTP == nil {
 		return nil, fmt.Errorf("invalid HTTP outbound")
 	}
@@ -32,7 +31,7 @@ func (c HTTPClient) proxyURL(out *config.OutboundConfig) (*url.URL, error) {
 // Transport builds a transport for ordinary http/https URL requests.
 // http.Transport automatically writes absolute-form HTTP proxy requests and
 // establishes CONNECT when accessing absolute https:// URLs.
-func (c HTTPClient) Transport(out *config.OutboundConfig) (*http.Transport, error) {
+func (c HTTPClient) Transport(out *Outbound) (*http.Transport, error) {
 	proxyURL, err := c.proxyURL(out)
 	if err != nil {
 		return nil, err
@@ -57,7 +56,7 @@ func (c HTTPClient) Transport(out *config.OutboundConfig) (*http.Transport, erro
 
 // Connect establishes an HTTP CONNECT tunnel through an upstream proxy.
 // The returned bufio.Reader must be used by the relay, as it may hold early TLS bytes.
-func (c HTTPClient) Connect(ctx context.Context, out *config.OutboundConfig, target string) (net.Conn, *bufio.Reader, error) {
+func (c HTTPClient) Connect(ctx context.Context, out *Outbound, target string) (net.Conn, *bufio.Reader, error) {
 	if _, err := c.proxyURL(out); err != nil {
 		return nil, nil, err
 	}
