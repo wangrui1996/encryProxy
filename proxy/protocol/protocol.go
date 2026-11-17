@@ -1,11 +1,10 @@
-// Package protocol contains application-layer proxy protocols and their outbound transports.
-// It uses core transport primitives but does not depend on config, stat, route or proxy.
 package protocol
 
 import (
 	"context"
 	"io"
 	"net"
+	"fmt"
 )
 
 // Resolver selects an outbound after the client protocol has provided a target hostname.
@@ -70,4 +69,24 @@ type Outbound struct {
 	Crypto      *CryptoOptions
 	HTTP        *HTTPOptions
 	Shadowsocks *ShadowsocksOptions
+}
+
+// 默认黑洞，毁灭一切请求
+type Blackhole struct{}
+
+func (Blackhole) Handle(conn net.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
+}
+
+// 默认自由访问，接受一切请求
+type Freedom struct{ Dial DialFunc }
+
+func (f Freedom) Connect(ctx context.Context, cfg *Outbound, target string) (net.Conn, error) {
+	if f.Dial == nil {
+		return nil, fmt.Errorf("freedom dialer is nil")
+	}
+	return f.Dial(ctx, cfg, target)
 }
