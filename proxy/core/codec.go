@@ -9,11 +9,6 @@ import (
 	"sync"
 )
 
-const (
-	framePayloadSize = 32 * 1024
-	maxFrameSize     = 1024 * 1024
-)
-
 type Codec interface {
 	// Decode 返回值可能引用 buf；调用方在使用结束前不得修改或复用 buf。
 	Decode(src io.Reader, buf []byte) ([]byte, error)

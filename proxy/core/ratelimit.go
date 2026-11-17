@@ -15,12 +15,11 @@ type RateLimit struct {
 
 func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 	r := &RateLimit{}
-	const burst = 32 * 1024
 	if UploadKbps > 0 {
-		r.uploadLimiter = rate.NewLimiter(rate.Limit(float64(UploadKbps)*1024), burst)
+		r.uploadLimiter = rate.NewLimiter(rate.Limit(float64(UploadKbps)*1024), rateLimitBurst)
 	}
 	if DownloadKbps > 0 {
-		r.downloadLimiter = rate.NewLimiter(rate.Limit(float64(DownloadKbps)*1024), burst)
+		r.downloadLimiter = rate.NewLimiter(rate.Limit(float64(DownloadKbps)*1024), rateLimitBurst)
 	}
 	return r
 }
