@@ -34,6 +34,9 @@ func EncodeAuthRequest(username, password string) ([]byte, error) {
 	if len(username) > 0xffff || len(password) > 0xffff {
 		return nil, fmt.Errorf("username or password is too long")
 	}
+	if 10+len(username)+len(password) > maxAuthPayload {
+		return nil, fmt.Errorf("authentication payload too large")
+	}
 
 	payload := make([]byte, 10+len(username)+len(password))
 	copy(payload[:4], authMagic)

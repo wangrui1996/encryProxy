@@ -131,13 +131,11 @@ func (m *Manager) Start() {
 // 可以重复调用。
 func (m *Manager) Close() {
 	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 
 	if m.closed {
-		m.lifecycleMu.Unlock()
-		m.wg.Wait()
 		return
 	}
-
 	m.closed = true
 
 	if m.cancel != nil {
@@ -145,9 +143,10 @@ func (m *Manager) Close() {
 		m.cancel = nil
 	}
 
-	m.lifecycleMu.Unlock()
-
+	// 等待采样协程退出后再收集一次，避免关闭前最后一秒的流量丢失。
+	// 持有生命周期锁直到收尾完成，确保并发 Close 不会提前返回。
 	m.wg.Wait()
+	m.collect(time.Now())
 }
 
 func (m *Manager) collect(now time.Time) {
@@ -316,8 +315,7 @@ func (m *Manager) getHistory(interval string, count int, now time.Time) TrafficH
 
 		switch interval {
 		case "hour":
-			t = now.Truncate(time.Hour).
-				Add(-time.Duration(i) * time.Hour)
+			t = hourStart(now).Add(-time.Duration(i) * time.Hour)
 
 		case "day":
 			t = time.Date(

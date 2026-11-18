@@ -10,8 +10,14 @@ const (
 	historyMonthCount = 12
 )
 
+func hourStart(t time.Time) time.Time {
+	// 不使用 Truncate(time.Hour)：它按 UTC 绝对时长截断，非整小时偏移时区会错位。
+	// 用 Add 保留当前时刻的 UTC 偏移，兼容夏令时重复的本地小时。
+	return t.Add(-time.Duration(t.Minute())*time.Minute - time.Duration(t.Second())*time.Second - time.Duration(t.Nanosecond()))
+}
+
 func hourTimestamp(t time.Time) int64 {
-	return t.Truncate(time.Hour).Unix()
+	return hourStart(t).Unix()
 }
 
 func dayTimestamp(t time.Time) int64 {

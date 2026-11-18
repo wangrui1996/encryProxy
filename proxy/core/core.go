@@ -9,7 +9,10 @@ const (
 	// 定义加密流每帧发送的明文分块大小，单位为字节
 	framePayloadSize = 32 * 1024
 	// 自定义加密帧体的最大长度，单位为字节
-	maxFrameSize     = 1024 * 1024
+	// 普通数据帧为 32KiB；认证帧最多允许 64KiB 明文。
+	// 最大密文长度包含 12-byte nonce 和 16-byte GCM tag。
+	// 避免接收端根据恶意帧头分配接近 1MiB 的缓冲区。
+	maxFrameSize = 64*1024 + 12 + 16
 	// 个转发方向使用的复制缓冲区大小，单位为字节
 	CopyBufferSize = 32 * 1024
 	// 限速器的令牌桶容量，单位为字节，控制允许的短时突发量，不代表每秒传输速率
@@ -17,7 +20,6 @@ const (
 	// AES-GCM 每帧最多 32KiB 明文，额外包含 12-byte nonce 与 16-byte tag。此池与 CopyBuffer 独立，避免不同长度混用。
 	cryptoBufferSize = CopyBufferSize + 12 + 16
 )
-
 
 // 在 ctx 取消时关闭 conn，并返回一个 stop 函数用于停止监听并等待协程退出
 func CloseOnCancel(ctx context.Context, conn net.Conn) func() {
