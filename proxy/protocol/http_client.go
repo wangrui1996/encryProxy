@@ -109,7 +109,7 @@ func (c HTTPClient) Connect(ctx context.Context, out *Outbound, target string) (
 	if err != nil {
 		return closeOnError(fmt.Errorf("read CONNECT response: %w", err))
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Do not drain a potentially unbounded error body from an untrusted proxy.
 		return closeOnError(fmt.Errorf("HTTP upstream CONNECT refused (%s)", resp.Status))
 	}
