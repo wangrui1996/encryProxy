@@ -13,6 +13,13 @@ type RateLimit struct {
 	downloadLimiter *rate.Limiter
 }
 
+type RateLimitedConn struct {
+	net.Conn
+	current atomic.Pointer[RateLimit]
+	ctx     context.Context
+	cancel  context.CancelFunc
+}
+
 // 按上传/下载带宽（KB/s）创建限速器，值为 0 的方向不启用限速
 func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 	r := &RateLimit{}
@@ -23,13 +30,6 @@ func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 		r.downloadLimiter = rate.NewLimiter(rate.Limit(float64(DownloadKbps)*1024), rateLimitBurst)
 	}
 	return r
-}
-
-type RateLimitedConn struct {
-	net.Conn
-	current atomic.Pointer[RateLimit]
-	ctx     context.Context
-	cancel  context.CancelFunc
 }
 
 // 用默认 context.Background() 包装连接并设置初始限速策略

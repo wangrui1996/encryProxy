@@ -23,10 +23,30 @@ const maxSSChunk = 0x3fff
 
 var errSSReplay = errors.New("replayed Shadowsocks TCP salt")
 
+type ssSaltCache struct {
+	mu      sync.Mutex
+	entries map[[sha256.Size]byte]time.Time
+}
+
 type ShadowsocksCipher struct {
 	method string
 	key    []byte
 	seen   *ssSaltCache // only enabled for inbound streams
+}
+
+type ShadowsocksConn struct {
+	net.Conn
+	suite      *ShadowsocksCipher
+	readMu     sync.Mutex
+	writeMu    sync.Mutex
+	readAEAD   cipher.AEAD
+	writeAEAD  cipher.AEAD
+	readNonce  [12]byte
+	writeNonce [12]byte
+	pending    []byte
+	readBuf    []byte // 每连接复用，pending 未消费完前不覆盖
+	readSalt   []byte
+	checked    bool
 }
 
 func NewShadowsocksCipher(method, password string, inbound bool) (*ShadowsocksCipher, error) {
@@ -83,11 +103,6 @@ func (s *ShadowsocksCipher) newAEAD(salt []byte) (cipher.AEAD, error) {
 	}
 }
 
-type ssSaltCache struct {
-	mu      sync.Mutex
-	entries map[[sha256.Size]byte]time.Time
-}
-
 func (c *ssSaltCache) accept(salt []byte) error {
 	if c == nil {
 		return nil
@@ -119,21 +134,6 @@ func (c *ssSaltCache) accept(salt []byte) error {
 	}
 	c.entries[id] = now.Add(10 * time.Minute)
 	return nil
-}
-
-type ShadowsocksConn struct {
-	net.Conn
-	suite      *ShadowsocksCipher
-	readMu     sync.Mutex
-	writeMu    sync.Mutex
-	readAEAD   cipher.AEAD
-	writeAEAD  cipher.AEAD
-	readNonce  [12]byte
-	writeNonce [12]byte
-	pending    []byte
-	readBuf    []byte // 每连接复用，pending 未消费完前不覆盖
-	readSalt   []byte
-	checked    bool
 }
 
 func NewShadowsocksConn(conn net.Conn, suite *ShadowsocksCipher) *ShadowsocksConn {

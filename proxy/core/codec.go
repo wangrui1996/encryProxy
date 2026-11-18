@@ -1,12 +1,13 @@
 package core
 
 import (
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 )
 
 // Decode 返回值可能引用 buf；调用方在使用结束前不得修改或复用 buf。
@@ -17,6 +18,25 @@ type Codec interface {
 
 type PlainCodec struct{}
 
+type CryptoCodec struct {
+	key     []byte
+	once    sync.Once
+	aead    cipher.AEAD
+	initErr error
+}
+
+func newAESGCM(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("create AES cipher: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+	return aead, nil
+}
+
 func (c *PlainCodec) Decode(src io.Reader, buf []byte) ([]byte, error) {
 	if len(buf) == 0 {
 		buf = make([]byte, framePayloadSize)
@@ -25,13 +45,6 @@ func (c *PlainCodec) Decode(src io.Reader, buf []byte) ([]byte, error) {
 	return buf[:n], err
 }
 func (c *PlainCodec) Encode(dst io.Writer, src []byte) (int, error) { return writeFull(dst, src) }
-
-type CryptoCodec struct {
-	key     []byte
-	once    sync.Once
-	aead    cipher.AEAD
-	initErr error
-}
 
 // 保留原有构造函数签名；首次 Encode/Decode 时仅初始化一次 AEAD。
 func NewCryptoCodec(key []byte) *CryptoCodec {
