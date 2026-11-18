@@ -202,9 +202,7 @@ type httpStallConn struct {
 	timeout time.Duration
 }
 
-func (c *httpStallConn) Read(p []byte) (int, error) {
-	return timedHTTPIO(c.timeout, func() { _ = c.Conn.Close() }, func() (int, error) { return c.Conn.Read(p) })
-}
+// Read 透传。Transport 可能在请求体仍持续上传时并发等待响应头。
 func (c *httpStallConn) Write(p []byte) (int, error) {
 	// Bound each write even when Response.Write supplies a very large slice.
 	total := 0

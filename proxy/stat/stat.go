@@ -192,6 +192,10 @@ func (m *Manager) collect(now time.Time) {
 	m.cleanupHistory(now)
 }
 
+func historyMonthStart(now time.Time, monthsAgo int) time.Time {
+	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -monthsAgo, 0)
+}
+
 func (m *Manager) cleanupHistory(now time.Time) {
 	hourCutoff := hourTimestamp(
 		now.Add(-time.Duration(historyHourCount-1) * time.Hour),
@@ -201,9 +205,7 @@ func (m *Manager) cleanupHistory(now time.Time) {
 		now.AddDate(0, 0, -(historyDayCount - 1)),
 	)
 
-	monthCutoff := monthTimestamp(
-		now.AddDate(0, -(historyMonthCount - 1), 0),
-	)
+	monthCutoff := historyMonthStart(now, historyMonthCount-1).Unix()
 
 	cleanupBuckets(m.hourlyPorts, hourCutoff)
 	cleanupBuckets(m.hourlyUsers, hourCutoff)
@@ -324,10 +326,7 @@ func (m *Manager) getHistory(interval string, count int, now time.Time) TrafficH
 			).AddDate(0, 0, -i)
 
 		default:
-			t = time.Date(
-				now.Year(), now.Month(), 1,
-				0, 0, 0, 0, now.Location(),
-			).AddDate(0, -i, 0)
+			t = historyMonthStart(now, i)
 		}
 
 		ts := t.Unix()

@@ -34,7 +34,9 @@ type Resolver struct {
 	inflight map[string]*dnsCall
 
 	doneCh   chan struct{}
-	stopCh   chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
+	queries  sync.WaitGroup
 	stopOnce sync.Once
 }
 
@@ -55,7 +57,7 @@ func NewResolver(ttl time.Duration) (*Resolver, error) {
 	r.ttl = ttl
 	r.cache = make(map[string]dnsEntry)
 	r.inflight = make(map[string]*dnsCall)
-	r.stopCh = make(chan struct{})
+	r.ctx, r.cancel = context.WithCancel(context.Background())
 	r.doneCh = make(chan struct{})
 
 	// 启动过期缓存自动清理。
@@ -74,7 +76,7 @@ func (r *Resolver) cleanupLoop() {
 		select {
 		case <-ticker.C:
 			r.cleanupExpired()
-		case <-r.stopCh:
+		case <-r.ctx.Done():
 			return
 		}
 	}
@@ -100,14 +102,17 @@ func (r *Resolver) cleanupExpired() {
 
 // Close 停止 DNS 缓存清理协程。
 func (r *Resolver) Close() {
-	if r == nil || r.stopCh == nil {
+	if r == nil || r.cancel == nil {
 		return
 	}
 
 	r.stopOnce.Do(func() {
-		close(r.stopCh)
+		r.mu.Lock()
+		r.cancel()
+		r.mu.Unlock()
 	})
 	<-r.doneCh
+	r.queries.Wait()
 }
 
 func cloneIPAddrs(ips []net.IPAddr) []net.IPAddr {
@@ -153,6 +158,10 @@ func (r *Resolver) Lookup(ctx context.Context, host string) ([]net.IPAddr, error
 
 	// 开启缓存。
 	r.mu.Lock()
+	if err := r.ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
 
 	if entry, ok := r.cache[key]; ok {
 		if time.Now().Before(entry.expiresAt) {
@@ -165,27 +174,26 @@ func (r *Resolver) Lookup(ctx context.Context, host string) ([]net.IPAddr, error
 	}
 
 	// 同一个域名只允许一个 DNS 查询。
-	if call, ok := r.inflight[key]; ok {
-		r.mu.Unlock()
-
-		select {
-		case <-call.done:
-			return cloneIPAddrs(call.ips), call.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	call := r.inflight[key]
+	if call == nil {
+		call = &dnsCall{done: make(chan struct{})}
+		r.inflight[key] = call
+		r.queries.Add(1)
+		go r.lookupShared(key, call)
 	}
-
-	call := &dnsCall{
-		done: make(chan struct{}),
-	}
-
-	r.inflight[key] = call
 	r.mu.Unlock()
 
-	// DNS 查询有独立的超时时间。
-	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-call.done:
+		return cloneIPAddrs(call.ips), call.err
+	}
+}
 
+func (r *Resolver) lookupShared(key string, call *dnsCall) {
+	defer r.queries.Done()
+	lookupCtx, cancel := context.WithTimeout(r.ctx, 5*time.Second)
 	ips, err := r.lookupDNS(lookupCtx, key)
 	cancel()
 
@@ -205,8 +213,6 @@ func (r *Resolver) Lookup(ctx context.Context, host string) ([]net.IPAddr, error
 	close(call.done)
 
 	r.mu.Unlock()
-
-	return cloneIPAddrs(ips), err
 }
 
 func (r *Resolver) lookupDNS(ctx context.Context, host string) ([]net.IPAddr, error) {
