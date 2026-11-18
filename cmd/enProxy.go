@@ -13,7 +13,7 @@ import (
 func main() {
 	// 保留项目现有日志初始化方式。
 	common.InitLogger("enproxy", "debug")
-
+	common.Log.Infof("enproxy version: %s", proxy.VERSION)
 	configPath := "config.json"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
