@@ -40,11 +40,15 @@ func (d *OutboundDialer) DialContext(ctx context.Context, address string) (net.C
 		return nil, fmt.Errorf("invalid outbound address %q: %w", address, err)
 	}
 
+	// One deadline covers DNS lookup and all TCP connection attempts.
+	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	if ip := net.ParseIP(host); ip != nil {
-		return d.dialer.DialContext(ctx, "tcp", address)
+		return d.dialer.DialContext(dialCtx, "tcp", address)
 	}
 
-	ips, err := d.resolver.Lookup(ctx, host)
+	ips, err := d.resolver.Lookup(dialCtx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +56,6 @@ func (d *OutboundDialer) DialContext(ctx context.Context, address string) (net.C
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("DNS returned no IP for %q", host)
 	}
-
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 
 	start := int(d.nextIP.Add(1)-1) % len(ips)
 

@@ -34,9 +34,9 @@ type DialFunc func(context.Context, string) (net.Conn, error)
 // Readers may be buffered (for example, after HTTP CONNECT negotiation).
 type RelayFunc func(ctx context.Context, downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error
 
-// AuthenticateFunc verifies an HTTP proxy username/password and updates the
-// current connection's account rate limiter and traffic attribution.
-type AuthenticateFunc func(username, password string) error
+// AuthenticateFunc verifies HTTP proxy credentials and returns a callback that
+// restores the connection's default account state after the request.
+type AuthenticateFunc func(username, password string) (reset func(), err error)
 
 // Handler represents a protocol-specific inbound connection handler.
 type Handler interface {

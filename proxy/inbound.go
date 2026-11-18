@@ -235,7 +235,8 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
 	}
 	accountLimited := core.NewRateLimitedConnWithContext(p.ctx, portLimited, initialLimit)
 	defer accountLimited.Close()
-	trafficConn := stat.NewTrafficConn(accountLimited, p.traffic, p.trafficMgr.RegisterUser(accountName))
+	defaultTraffic := p.trafficMgr.RegisterUser(accountName)
+	trafficConn := stat.NewTrafficConn(accountLimited, p.traffic, defaultTraffic)
 
 	clientConn, err := wrapCrypto(trafficConn, p.inbound.Crypto)
 	if err != nil {
@@ -243,24 +244,30 @@ func (p *Proxy) handleConnection(inboundConn net.Conn) {
 		return
 	}
 
-	proxyAuthenticate := func(username, password string) error {
+	proxyAuthenticate := func(username, password string) (func(), error) {
 		if p.accountManager == nil {
-			return fmt.Errorf("proxy account manager is nil")
+			return nil, fmt.Errorf("proxy account manager is nil")
 		}
 		acc, err := p.accountManager.AuthenticateProxy(username, password)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if acc == nil {
-			return fmt.Errorf("proxy account manager returned nil account")
+			return nil, fmt.Errorf("proxy account manager returned nil account")
 		}
 		// An authenticated custom crypto account takes precedence over the
 		// proxy protocol account for limit and traffic attribution.
-		if cryptoAccount == nil {
-			accountLimited.SetLimit(acc.RateLimit)
-			trafficConn.SetUserTraffic(p.trafficMgr.RegisterUser(acc.Name))
+		if cryptoAccount != nil {
+			return nil, nil
 		}
-		return nil
+
+		accountLimited.SetLimit(acc.RateLimit)
+		trafficConn.SetUserTraffic(p.trafficMgr.RegisterUser(acc.Name))
+		return func() {
+			// Restore defaults before the next keep-alive request is read.
+			accountLimited.SetLimit(initialLimit)
+			trafficConn.SetUserTraffic(defaultTraffic)
+		}, nil
 	}
 
 	if err := p.handler.Handle(ctx, clientConn, proxyAuthenticate); err != nil {

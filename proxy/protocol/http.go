@@ -70,9 +70,16 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 			_ = writeHTTPError(conn, http.StatusBadRequest)
 			return fmt.Errorf("read HTTP proxy request: %w", err)
 		}
+		var resetAuth func()
 		if h.Inbound.HTTP.AuthRequired {
 			username, password, ok := parseProxyBasic(req.Header.Get("Proxy-Authorization"))
-			if !ok || authenticate == nil || authenticate(username, password) != nil {
+			if !ok || authenticate == nil {
+				// Do not drain an unauthenticated request body.
+				_ = writeProxyAuthRequired(conn)
+				return nil
+			}
+			resetAuth, err = authenticate(username, password)
+			if err != nil {
 				// Do not drain an unauthenticated request body.
 				_ = writeProxyAuthRequired(conn)
 				return nil
@@ -102,6 +109,10 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 			return h.handleConnect(ctx, conn, reader, outbound, target)
 		}
 		keepAlive, err := h.handleForward(ctx, conn, req, outbound)
+		if resetAuth != nil {
+			// The next request's headers must not inherit the previous account.
+			resetAuth()
+		}
 		if err != nil {
 			return err
 		}
