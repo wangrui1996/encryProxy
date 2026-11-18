@@ -2,24 +2,37 @@ package protocol
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
-	"fmt"
+	"net/http"
 )
 
 // Resolver selects an outbound after the client protocol has provided a target hostname.
 type Resolver interface {
-	ResolveProxy(inboundTag, hostname string) (*Outbound, error)
+	ResolveProxy(inboundTag, hostname string) (string, error)
 }
 
-// DialFunc opens one outbound stream. The assembly layer owns network dialing,
-// optional AES-GCM framing and ENPA authentication. For freedom, address is
-// the target; for HTTP and Shadowsocks outbounds, it is the upstream server.
-type DialFunc func(ctx context.Context, outbound *Outbound, address string) (net.Conn, error)
+// OutboundConnector opens a routed stream and preserves bytes read ahead by a handshake.
+type OutboundConnector interface {
+	Connect(ctx context.Context, tag, target string) (net.Conn, io.Reader, error)
+}
+
+type HTTPOutbounds interface {
+	OutboundConnector
+	NewHTTPTransport(tag string) (*http.Transport, error)
+}
+
+// ErrBlackhole tells the inbound handler to close silently.
+var ErrBlackhole = errors.New("blackhole outbound")
+
+// DialFunc opens the raw or outer-encrypted stream used by a protocol client.
+type DialFunc func(context.Context, string) (net.Conn, error)
 
 // RelayFunc forwards a full-duplex stream; core supplies the implementation.
 // Readers may be buffered (for example, after HTTP CONNECT negotiation).
-type RelayFunc func(downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error
+type RelayFunc func(ctx context.Context, downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error
 
 // AuthenticateFunc verifies an HTTP proxy username/password and updates the
 // current connection's account rate limiter and traffic attribution.
@@ -51,42 +64,28 @@ type ShadowsocksOptions struct {
 	Password string
 }
 
-// CryptoOptions describes the optional outer transport encryption and
-// authentication performed by the assembly-layer DialFunc.
-type CryptoOptions struct {
-	Key          string
-	AuthRequired bool
-	Account      string
-	Passwd       string
-}
-
-// Outbound is immutable runtime route data. It contains no dial callback;
-// protocol handlers receive the single DialFunc dependency separately.
+// Outbound contains the application protocol parameters for one upstream server.
 type Outbound struct {
-	Tag         string
-	Protocol    string
 	Server      string
-	Crypto      *CryptoOptions
 	HTTP        *HTTPOptions
 	Shadowsocks *ShadowsocksOptions
 }
 
-// 默认黑洞，毁灭一切请求
-type Blackhole struct{}
-
-func (Blackhole) Handle(conn net.Conn) error {
-	if conn == nil {
-		return nil
-	}
-	return conn.Close()
+type Router interface {
+	Resolver
+	RelayResolver
 }
 
-// 默认自由访问，接受一切请求
-type Freedom struct{ Dial DialFunc }
-
-func (f Freedom) Connect(ctx context.Context, cfg *Outbound, target string) (net.Conn, error) {
-	if f.Dial == nil {
-		return nil, fmt.Errorf("freedom dialer is nil")
+// NewHandler selects the inbound application protocol once when the listener is built.
+func NewHandler(in InboundOptions, routes Router, outbounds HTTPOutbounds, relay RelayFunc) (Handler, error) {
+	switch in.Protocol {
+	case "tcp":
+		return NewTCP(in, routes, outbounds, relay)
+	case "http":
+		return NewHTTP(in, routes, outbounds, relay)
+	case "shadowsocks":
+		return NewShadowsocks(in, routes, outbounds, relay)
+	default:
+		return nil, fmt.Errorf("inbound %q: unsupported protocol %q", in.Tag, in.Protocol)
 	}
-	return f.Dial(ctx, cfg, target)
 }

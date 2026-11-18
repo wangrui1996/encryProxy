@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -12,25 +13,25 @@ import (
 // Shadowsocks is an inbound classic AEAD Shadowsocks TCP server.
 // Routing is shared with HTTP; UDP ASSOCIATE/relay is a separate feature.
 type Shadowsocks struct {
-	Inbound InboundOptions
-	Routes  Resolver
-	Dial    DialFunc
-	Relay   RelayFunc
-	cipher  *core.ShadowsocksCipher
+	Inbound   InboundOptions
+	Routes    Resolver
+	Outbounds OutboundConnector
+	Relay     RelayFunc
+	cipher    *core.ShadowsocksCipher
 }
 
-func NewShadowsocks(in InboundOptions, routes Resolver, dial DialFunc, relay RelayFunc) (*Shadowsocks, error) {
+func NewShadowsocks(in InboundOptions, routes Resolver, outbounds OutboundConnector, relay RelayFunc) (*Shadowsocks, error) {
 	if in.Protocol != "shadowsocks" || in.Shadowsocks == nil {
 		return nil, fmt.Errorf("Shadowsocks inbound config required")
 	}
-	if routes == nil || dial == nil || relay == nil {
+	if routes == nil || outbounds == nil || relay == nil {
 		return nil, fmt.Errorf("Shadowsocks route resolver, dialer and relay are required")
 	}
 	suite, err := core.NewShadowsocksCipher(in.Shadowsocks.Method, in.Shadowsocks.Password, true)
 	if err != nil {
 		return nil, err
 	}
-	return &Shadowsocks{Inbound: in, Routes: routes, Dial: dial, Relay: relay, cipher: suite}, nil
+	return &Shadowsocks{Inbound: in, Routes: routes, Outbounds: outbounds, Relay: relay, cipher: suite}, nil
 }
 
 func (s *Shadowsocks) Handle(ctx context.Context, downstream net.Conn, _ AuthenticateFunc) error {
@@ -49,16 +50,13 @@ func (s *Shadowsocks) Handle(ctx context.Context, downstream net.Conn, _ Authent
 	if err != nil {
 		return fmt.Errorf("route Shadowsocks destination %s: %w", hostname, err)
 	}
-	if outbound == nil {
-		return fmt.Errorf("nil outbound for %s", hostname)
+	upstream, upstreamReader, err := s.Outbounds.Connect(ctx, outbound, target)
+	if errors.Is(err, ErrBlackhole) {
+		return downstream.Close()
 	}
-	if outbound.Protocol == "blackhole" {
-		return (Blackhole{}).Handle(downstream)
-	}
-	upstream, upstreamReader, err := connectTarget(ctx, s.Dial, outbound, target)
 	if err != nil {
 		return fmt.Errorf("connect Shadowsocks destination %s: %w", target, err)
 	}
 	defer upstream.Close()
-	return s.Relay(clear, clear, upstream, upstreamReader)
+	return s.Relay(ctx, clear, clear, upstream, upstreamReader)
 }

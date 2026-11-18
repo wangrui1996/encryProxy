@@ -92,7 +92,7 @@ func (cfg *Config) Validate() error {
 func (cfg *Config) validateReferences() error {
 	inboundTags := make(map[string]*InboundConfig, len(cfg.Inbounds))
 	// 配置层只校验引用是否存在、协议是否兼容，不管理运行时 outbound。
-	// outbound 的索引构建和路由选择由 route 模块负责。
+	// 出站管理器构建运行时索引，route 模块只选择出站标签。
 	outboundProtocols := make(map[string]string, len(cfg.Outbounds)+2)
 	outboundProtocols["freedom"] = "freedom"
 	outboundProtocols["blackhole"] = "blackhole"

@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"time"
@@ -14,12 +13,6 @@ import (
 	"wangjui.com/enproxy/proxy/route"
 	"wangjui.com/enproxy/proxy/stat"
 )
-
-// Account 是认证成功后的运行时账号，账号级限速器为所有连接共享。
-type Account struct {
-	Name      string
-	RateLimit *core.RateLimit
-}
 
 // Proxy 管理一个入站监听端口及其连接的公共处理逻辑。
 type Proxy struct {
@@ -48,7 +41,7 @@ type Proxy struct {
 
 // NewProxy 使用 ProxyManager 创建的具体组件组装一个入站监听器。
 // 根包不再维护 Dependencies 聚合结构或额外的依赖接口。
-func NewProxy(inbound config.InboundConfig, accounts *AccountManager, routes *route.Manager, dialer *OutboundDialer, traffic *stat.Manager) (*Proxy, error) {
+func NewProxy(inbound config.InboundConfig, accounts *AccountManager, routes *route.Manager, outbounds *OutboundManager, traffic *stat.Manager) (*Proxy, error) {
 	if err := inbound.Validate(); err != nil {
 		return nil, fmt.Errorf("inbound %q: %w", inbound.Tag, err)
 	}
@@ -62,51 +55,16 @@ func NewProxy(inbound config.InboundConfig, accounts *AccountManager, routes *ro
 		return nil, fmt.Errorf("inbound %q needs HTTP proxy authenticator", inbound.Tag)
 	}
 
-	if routes == nil || dialer == nil {
-		return nil, fmt.Errorf("inbound %q: route manager and outbound dialer are required", inbound.Tag)
+	if routes == nil || outbounds == nil {
+		return nil, fmt.Errorf("inbound %q: route manager and outbound manager are required", inbound.Tag)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	initialized := false
-	defer func() {
-		if !initialized {
-			cancel()
-		}
-	}()
-	relay := func(down net.Conn, dr io.Reader, up net.Conn, ur io.Reader) error {
-		return core.RelayContext(ctx, down, dr, up, ur)
+	egress := inboundOutbounds{OutboundManager: outbounds, parent: ctx}
+	handler, err := protocol.NewHandler(protocolInboundOptions(inbound), routes, egress, core.RelayContext)
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-
-	// Routing only selects an outbound. A single DialFunc performs all
-	// outbound dialing and transport setup for every protocol handler.
-	protocolResolver := protocolRoutes{manager: routes}
-	protocolDial := newProtocolDialWithContext(ctx, dialer)
-	protocolIn := protocolInboundOptions(inbound)
-
-	var handler protocol.Handler
-	switch inbound.Protocol {
-	case "tcp":
-		var err error
-		handler, err = protocol.NewTCP(protocolIn, protocolResolver, protocolDial, relay)
-		if err != nil {
-			return nil, err
-		}
-	case "http":
-		var err error
-		handler, err = protocol.NewHTTP(protocolIn, protocolResolver, protocolDial, relay)
-		if err != nil {
-			return nil, err
-		}
-	case "shadowsocks":
-		var err error
-		handler, err = protocol.NewShadowsocks(protocolIn, protocolResolver, protocolDial, relay)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("inbound %q: unsupported protocol %q", inbound.Tag, inbound.Protocol)
-	}
-
-	initialized = true
 	return &Proxy{
 		inbound:        inbound,
 		accountManager: accounts,
@@ -259,4 +217,82 @@ func (p *Proxy) Close() {
 			}
 		}
 	})
+}
+
+// handleConnection owns the composition of authentication, rate limit,
+// wire-byte traffic accounting and application protocol handling.
+func (p *Proxy) handleConnection(inboundConn net.Conn) {
+	ctx, cancel := context.WithCancel(p.ctx)
+	defer cancel()
+	accountName := "anonymous"
+	var cryptoAccount *Account
+	if p.inbound.Crypto != nil && p.inbound.Crypto.AuthRequired {
+		var err error
+		cryptoAccount, err = p.authenticate(inboundConn)
+		if err != nil {
+			Logger.Warnf("client %s authentication failed on %s: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
+			return
+		}
+		accountName = cryptoAccount.Name
+	}
+
+	// Wire traffic is rate-limited and counted before decryption (same as before).
+	// Port and account limits remain independent; only ONE account limiter exists.
+	portLimited := core.NewRateLimitedConnWithContext(p.ctx, inboundConn, p.portRateLimit)
+	defer portLimited.Close()
+	var initialLimit *core.RateLimit
+	if cryptoAccount != nil {
+		initialLimit = cryptoAccount.RateLimit
+	}
+	accountLimited := core.NewRateLimitedConnWithContext(p.ctx, portLimited, initialLimit)
+	defer accountLimited.Close()
+	trafficConn := stat.NewTrafficConn(accountLimited, p.traffic, p.trafficMgr.RegisterUser(accountName))
+
+	clientConn, err := wrapCrypto(trafficConn, p.inbound.Crypto)
+	if err != nil {
+		Logger.Errorf("create inbound encryption stream: %v", err)
+		return
+	}
+
+	proxyAuthenticate := func(username, password string) error {
+		if p.accountManager == nil {
+			return fmt.Errorf("proxy account manager is nil")
+		}
+		acc, err := p.accountManager.AuthenticateProxy(username, password)
+		if err != nil {
+			return err
+		}
+		if acc == nil {
+			return fmt.Errorf("proxy account manager returned nil account")
+		}
+		// An authenticated custom crypto account takes precedence over the
+		// proxy protocol account for limit and traffic attribution.
+		if cryptoAccount == nil {
+			accountLimited.SetLimit(acc.RateLimit)
+			trafficConn.SetUserTraffic(p.trafficMgr.RegisterUser(acc.Name))
+		}
+		return nil
+	}
+
+	if err := p.handler.Handle(ctx, clientConn, proxyAuthenticate); err != nil {
+		Logger.Errorf("client %s on %s: %v", inboundConn.RemoteAddr(), p.inbound.Tag, err)
+	}
+}
+
+func protocolHTTPOptions(cfg *config.HTTPConfig) *protocol.HTTPOptions {
+	if cfg == nil {
+		return nil
+	}
+	return &protocol.HTTPOptions{AuthRequired: cfg.AuthRequired, Account: cfg.Account, Passwd: cfg.Passwd}
+}
+
+func protocolShadowsocksOptions(cfg *config.ShadowsocksConfig) *protocol.ShadowsocksOptions {
+	if cfg == nil {
+		return nil
+	}
+	return &protocol.ShadowsocksOptions{Method: cfg.Method, Password: cfg.Password}
+}
+
+func protocolInboundOptions(in config.InboundConfig) protocol.InboundOptions {
+	return protocol.InboundOptions{Tag: in.Tag, Protocol: in.Protocol, HTTP: protocolHTTPOptions(in.HTTP), Shadowsocks: protocolShadowsocksOptions(in.Shadowsocks)}
 }

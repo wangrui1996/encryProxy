@@ -14,11 +14,11 @@ import (
 )
 
 // HTTPClient implements the HTTP upstream proxy transport (client side).
-// Its Dial must be provided by core, so optional encrypted outer transport works.
+// Its Dial is supplied by the outbound manager, so optional encrypted outer transport works.
 type HTTPClient struct{ Dial DialFunc }
 
 func (c HTTPClient) proxyURL(out *Outbound) (*url.URL, error) {
-	if out == nil || out.Protocol != "http" || out.HTTP == nil {
+	if out == nil || out.HTTP == nil {
 		return nil, fmt.Errorf("invalid HTTP outbound")
 	}
 	u := &url.URL{Scheme: "http", Host: out.Server}
@@ -39,10 +39,23 @@ func (c HTTPClient) Transport(out *Outbound) (*http.Transport, error) {
 	if c.Dial == nil {
 		return nil, fmt.Errorf("outbound dialer is nil")
 	}
+	return newHTTPTransport(c.Dial, proxyURL, true), nil
+}
+
+// NewDirectHTTPTransport uses an origin stream for direct and Shadowsocks outbounds.
+func NewDirectHTTPTransport(dial DialFunc, http2 bool) *http.Transport {
+	return newHTTPTransport(dial, nil, http2)
+}
+
+func newHTTPTransport(dial DialFunc, proxyURL *url.URL, http2 bool) *http.Transport {
+	var proxy func(*http.Request) (*url.URL, error)
+	if proxyURL != nil {
+		proxy = http.ProxyURL(proxyURL)
+	}
 	return &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
+		Proxy: proxy,
 		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
-			conn, err := c.Dial(ctx, out, address)
+			conn, err := dial(ctx, address)
 			if err != nil {
 				return nil, err
 			}
@@ -55,8 +68,8 @@ func (c HTTPClient) Transport(out *Outbound) (*http.Transport, error) {
 		TLSHandshakeTimeout:    10 * time.Second,
 		ResponseHeaderTimeout:  30 * time.Second,
 		DisableCompression:     true,
-		ForceAttemptHTTP2:      true,
-	}, nil
+		ForceAttemptHTTP2:      http2,
+	}
 }
 
 // Connect establishes an HTTP CONNECT tunnel through an upstream proxy.
@@ -68,7 +81,7 @@ func (c HTTPClient) Connect(ctx context.Context, out *Outbound, target string) (
 	if c.Dial == nil {
 		return nil, nil, fmt.Errorf("outbound dialer is nil")
 	}
-	upstream, err := c.Dial(ctx, out, out.Server)
+	upstream, err := c.Dial(ctx, out.Server)
 	if err != nil {
 		return nil, nil, err
 	}

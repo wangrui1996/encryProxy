@@ -19,19 +19,19 @@ import (
 type HTTP struct {
 	Inbound    InboundOptions
 	Routes     Resolver
-	Dial       DialFunc
+	Outbounds  HTTPOutbounds
 	Relay      RelayFunc
 	transports sync.Map // map[OutboundTag]*http.Transport, shared by concurrent sessions
 }
 
-func NewHTTP(in InboundOptions, routes Resolver, dial DialFunc, relay RelayFunc) (*HTTP, error) {
+func NewHTTP(in InboundOptions, routes Resolver, outbounds HTTPOutbounds, relay RelayFunc) (*HTTP, error) {
 	if in.Protocol != "http" || in.HTTP == nil {
 		return nil, fmt.Errorf("HTTP inbound config required")
 	}
-	if routes == nil || dial == nil || relay == nil {
+	if routes == nil || outbounds == nil || relay == nil {
 		return nil, fmt.Errorf("HTTP route resolver, dialer and relay are required")
 	}
-	return &HTTP{Inbound: in, Routes: routes, Dial: dial, Relay: relay}, nil
+	return &HTTP{Inbound: in, Routes: routes, Outbounds: outbounds, Relay: relay}, nil
 }
 
 func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate AuthenticateFunc) error {
@@ -98,14 +98,6 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 			_ = writeHTTPError(conn, http.StatusBadGateway)
 			return err
 		}
-		if outbound == nil {
-			_ = writeHTTPError(conn, http.StatusBadGateway)
-			return fmt.Errorf("nil outbound for %s", hostname)
-		}
-		if outbound.Protocol == "blackhole" {
-			// Silence, rather than an error response, is the entire point of blackhole.
-			return (Blackhole{}).Handle(conn)
-		}
 		if req.Method == http.MethodConnect {
 			return h.handleConnect(ctx, conn, reader, outbound, target)
 		}
@@ -120,8 +112,11 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 }
 
 // handleConnect tunnels TLS without inspecting or modifying the encrypted application data.
-func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstreamReader *bufio.Reader, outbound *Outbound, target string) error {
-	upstream, upstreamReader, err := connectTarget(ctx, h.Dial, outbound, target)
+func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstreamReader *bufio.Reader, outbound string, target string) error {
+	upstream, upstreamReader, err := h.Outbounds.Connect(ctx, outbound, target)
+	if errors.Is(err, ErrBlackhole) {
+		return downstream.Close()
+	}
 	if err != nil {
 		_ = writeHTTPError(downstream, http.StatusBadGateway)
 		return err
@@ -130,56 +125,18 @@ func (h *HTTP) handleConnect(ctx context.Context, downstream net.Conn, downstrea
 	if _, err := io.WriteString(downstream, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return err
 	}
-	return h.Relay(downstream, downstreamReader, upstream, upstreamReader)
+	return h.Relay(ctx, downstream, downstreamReader, upstream, upstreamReader)
 }
 
-func (h *HTTP) getTransport(out *Outbound) (*http.Transport, error) {
-	if item, ok := h.transports.Load(out.Tag); ok {
+func (h *HTTP) getTransport(tag string) (*http.Transport, error) {
+	if item, ok := h.transports.Load(tag); ok {
 		return item.(*http.Transport), nil
 	}
-	var tr *http.Transport
-	switch out.Protocol {
-	case "freedom":
-		tr = &http.Transport{
-			DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
-				conn, err := h.Dial(ctx, out, address)
-				if err != nil {
-					return nil, err
-				}
-				return &httpStallConn{Conn: conn, timeout: httpStallTimeout}, nil
-			},
-			MaxResponseHeaderBytes: maxHTTPResponseHeaderBytes,
-			MaxIdleConns:           64, MaxIdleConnsPerHost: 16,
-			IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second, DisableCompression: true,
-			ForceAttemptHTTP2: true,
-		}
-	case "http":
-		var err error
-		tr, err = (HTTPClient{Dial: h.Dial}).Transport(out)
-		if err != nil {
-			return nil, err
-		}
-	case "shadowsocks":
-		// http.Transport uses origin-form HTTP over the Shadowsocks TCP target stream.
-		// HTTPS URLs negotiate TLS with the destination through this stream.
-		tr = &http.Transport{
-			DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
-				conn, err := (ShadowsocksClient{Dial: h.Dial}).Connect(ctx, out, address)
-				if err != nil {
-					return nil, err
-				}
-				return &httpStallConn{Conn: conn, timeout: httpStallTimeout}, nil
-			},
-			MaxResponseHeaderBytes: maxHTTPResponseHeaderBytes,
-			MaxIdleConns:           64, MaxIdleConnsPerHost: 16,
-			IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second, DisableCompression: true,
-		}
-	default:
-		return nil, fmt.Errorf("unsupported HTTP outbound %q", out.Protocol)
+	tr, err := h.Outbounds.NewHTTPTransport(tag)
+	if err != nil {
+		return nil, err
 	}
-	existing, loaded := h.transports.LoadOrStore(out.Tag, tr)
+	existing, loaded := h.transports.LoadOrStore(tag, tr)
 	if loaded {
 		tr.CloseIdleConnections()
 		return existing.(*http.Transport), nil
@@ -187,8 +144,11 @@ func (h *HTTP) getTransport(out *Outbound) (*http.Transport, error) {
 	return tr, nil
 }
 
-func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http.Request, outbound *Outbound) (bool, error) {
+func (h *HTTP) handleForward(ctx context.Context, downstream net.Conn, req *http.Request, outbound string) (bool, error) {
 	tr, err := h.getTransport(outbound)
+	if errors.Is(err, ErrBlackhole) {
+		return false, downstream.Close()
+	}
 	if err != nil {
 		_ = writeHTTPError(downstream, http.StatusBadGateway)
 		return false, err

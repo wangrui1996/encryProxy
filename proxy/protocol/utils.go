@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -9,27 +8,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-// connectTarget is shared by HTTP CONNECT and Shadowsocks inbound traffic.
-// Returns the data reader separately to preserve HTTP CONNECT buffered bytes.
-func connectTarget(ctx context.Context, dial DialFunc, out *Outbound, target string) (net.Conn, io.Reader, error) {
-	if out == nil {
-		return nil, nil, fmt.Errorf("outbound is nil")
-	}
-	switch out.Protocol {
-	case "freedom":
-		conn, err := (Freedom{Dial: dial}).Connect(ctx, out, target)
-		return conn, conn, err
-	case "http":
-		conn, buffered, err := (HTTPClient{Dial: dial}).Connect(ctx, out, target)
-		return conn, buffered, err
-	case "shadowsocks":
-		conn, err := (ShadowsocksClient{Dial: dial}).Connect(ctx, out, target)
-		return conn, conn, err
-	default:
-		return nil, nil, fmt.Errorf("unsupported proxy outbound %q", out.Protocol)
-	}
-}
 
 // validateTarget is shared by HTTP CONNECT, freedom and Shadowsocks requests.
 // It validates host:port syntax without forcing DNS resolution at this layer.

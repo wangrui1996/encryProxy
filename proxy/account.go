@@ -9,6 +9,12 @@ import (
 	"wangjui.com/enproxy/proxy/core"
 )
 
+// Account 是认证成功后的运行时账号，账号级限速器为所有连接共享。
+type Account struct {
+	Name      string
+	RateLimit *core.RateLimit
+}
+
 type accountEntry struct {
 	password     string
 	cryptoEnable bool

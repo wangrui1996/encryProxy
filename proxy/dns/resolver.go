@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"wangjui.com/enproxy/proxy/config"
 )
 
 const dnsCleanupInterval = time.Minute
@@ -40,23 +38,18 @@ type Resolver struct {
 	stopOnce sync.Once
 }
 
-func NewResolver(cfg *config.DNSConfig) (*Resolver, error) {
+func NewResolver(ttl time.Duration) (*Resolver, error) {
 	r := &Resolver{
 		resolver: net.DefaultResolver,
 	}
 
 	// 未配置 DNS：不启用缓存。
-	if cfg == nil {
+	if ttl == 0 {
 		return r, nil
 	}
 
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
-	ttl, err := time.ParseDuration(cfg.CacheTTL)
-	if err != nil {
-		return nil, err
+	if ttl < 0 {
+		return nil, fmt.Errorf("negative DNS cache TTL: %s", ttl)
 	}
 
 	r.ttl = ttl

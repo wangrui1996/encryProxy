@@ -89,25 +89,29 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 		return nil, fmt.Errorf("initialize account manager: %w", err)
 	}
 
-	manager.routeManager, err = route.NewManager(cfg.Route, cfg.Inbounds, cfg.Outbounds)
+	manager.routeManager, err = route.NewManager(routeRules(cfg.Route))
 	if err != nil {
 		return nil, fmt.Errorf("initialize route manager: %w", err)
 	}
 
-	manager.dnsResolver, err = dns.NewResolver(cfg.DNS)
+	var ttl time.Duration
+	if cfg.DNS != nil {
+		ttl, err = time.ParseDuration(cfg.DNS.CacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("parse DNS cache TTL: %w", err)
+		}
+	}
+	manager.dnsResolver, err = dns.NewResolver(ttl)
 	if err != nil {
 		return nil, fmt.Errorf("initialize DNS resolver: %w", err)
 	}
 
-	outboundDialer := NewOutboundDialer(manager.dnsResolver)
+	outbounds, err := NewOutboundManager(cfg.Outbounds, NewOutboundDialer(manager.dnsResolver))
+	if err != nil {
+		return nil, fmt.Errorf("initialize outbound manager: %w", err)
+	}
 	for _, inbound := range cfg.Inbounds {
-		proxyInstance, err := NewProxy(
-			inbound,
-			manager.accountManager,
-			manager.routeManager,
-			outboundDialer,
-			manager.trafficManager,
-		)
+		proxyInstance, err := NewProxy(inbound, manager.accountManager, manager.routeManager, outbounds, manager.trafficManager)
 		if err != nil {
 			return nil, fmt.Errorf("initialize inbound %q: %w", inbound.Tag, err)
 		}
@@ -249,4 +253,22 @@ func (manager *ProxyManager) Count() int {
 		return 0
 	}
 	return len(manager.proxies)
+}
+
+// routeRules 在配置完成引用和协议兼容性校验后，提取运行时匹配所需字段。
+func routeRules(configs []config.RouteConfig) []route.Rule {
+	rules := make([]route.Rule, 0, len(configs))
+	for _, cfg := range configs {
+		rule := route.Rule{Type: cfg.Type, Inbounds: cfg.Inbound}
+		if cfg.Type == "relay" {
+			rule.Outbound = cfg.Relay.Outbound
+		} else {
+			rule.Outbound = cfg.Proxy.DefaultOutbound
+			for _, p := range cfg.Proxy.Policies {
+				rule.Policies = append(rule.Policies, route.Policy{Domains: p.Domain, Outbound: p.Outbound})
+			}
+		}
+		rules = append(rules, rule)
+	}
+	return rules
 }

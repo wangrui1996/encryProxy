@@ -8,7 +8,7 @@ import (
 
 // RelayResolver only exposes the fixed-target TCP route needed by this handler.
 type RelayResolver interface {
-	ResolveRelay(inboundTag string) (*Outbound, error)
+	ResolveRelay(inboundTag string) (string, error)
 }
 
 // TCP handles only the TCP protocol-specific routing and outbound connection.
@@ -16,15 +16,15 @@ type RelayResolver interface {
 type TCP struct {
 	inbound       InboundOptions
 	routeResolver RelayResolver
-	dial          DialFunc
+	outbounds     OutboundConnector
 	relay         RelayFunc
 }
 
-func NewTCP(inbound InboundOptions, routes RelayResolver, dial DialFunc, relay RelayFunc) (*TCP, error) {
-	if inbound.Protocol != "tcp" || routes == nil || dial == nil || relay == nil {
+func NewTCP(inbound InboundOptions, routes RelayResolver, outbounds OutboundConnector, relay RelayFunc) (*TCP, error) {
+	if inbound.Protocol != "tcp" || routes == nil || outbounds == nil || relay == nil {
 		return nil, fmt.Errorf("TCP inbound requires tcp protocol, route resolver, dialer and relay")
 	}
-	return &TCP{inbound: inbound, routeResolver: routes, dial: dial, relay: relay}, nil
+	return &TCP{inbound: inbound, routeResolver: routes, outbounds: outbounds, relay: relay}, nil
 }
 
 func (h *TCP) Handle(ctx context.Context, inboundConn net.Conn, _ AuthenticateFunc) error {
@@ -32,15 +32,11 @@ func (h *TCP) Handle(ctx context.Context, inboundConn net.Conn, _ AuthenticateFu
 	if err != nil {
 		return fmt.Errorf("resolve relay route: %w", err)
 	}
-	if outbound == nil || outbound.Protocol != "tcp" {
-		return fmt.Errorf("inbound %q: relay requires tcp outbound", h.inbound.Tag)
-	}
-
-	outboundConn, err := h.dial(ctx, outbound, outbound.Server)
+	outboundConn, reader, err := h.outbounds.Connect(ctx, outbound, "")
 	if err != nil {
-		return fmt.Errorf("dial outbound %s (%s): %w", outbound.Tag, outbound.Server, err)
+		return fmt.Errorf("connect tcp outbound %s: %w", outbound, err)
 	}
 	defer outboundConn.Close()
 
-	return h.relay(inboundConn, inboundConn, outboundConn, outboundConn)
+	return h.relay(ctx, inboundConn, inboundConn, outboundConn, reader)
 }

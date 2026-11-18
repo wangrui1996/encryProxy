@@ -272,3 +272,11 @@ func writeAuthFull(dst io.Writer, data []byte) (int, error) {
 	}
 	return total, nil
 }
+
+// wrapCrypto adapts outer AES-GCM framing to a stream for every inbound protocol.
+func wrapCrypto(conn net.Conn, cfg *config.CryptoConfig) (net.Conn, error) {
+	if cfg == nil {
+		return conn, nil
+	}
+	return core.NewCryptoConn(conn, cfg.Key)
+}

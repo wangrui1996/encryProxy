@@ -14,7 +14,7 @@ import (
 type ShadowsocksClient struct{ Dial DialFunc }
 
 func (c ShadowsocksClient) Connect(ctx context.Context, out *Outbound, target string) (net.Conn, error) {
-	if out == nil || out.Protocol != "shadowsocks" || out.Shadowsocks == nil {
+	if out == nil || out.Shadowsocks == nil {
 		return nil, fmt.Errorf("invalid Shadowsocks outbound")
 	}
 	if c.Dial == nil {
@@ -28,7 +28,7 @@ func (c ShadowsocksClient) Connect(ctx context.Context, out *Outbound, target st
 	if err != nil {
 		return nil, err
 	}
-	raw, err := c.Dial(ctx, out, out.Server)
+	raw, err := c.Dial(ctx, out.Server)
 	if err != nil {
 		return nil, err
 	}
