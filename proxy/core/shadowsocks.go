@@ -18,9 +18,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
-// Classic Shadowsocks AEAD (SIP004/SIP007), NOT Shadowsocks 2022.
-// Kept separate from CryptoCodec: the two wire formats are incompatible.
-// Each TCP direction is: salt | AEAD(length) | AEAD(payload) | ...
+
 const maxSSChunk = 0x3fff
 
 var errSSReplay = errors.New("replayed Shadowsocks TCP salt")
@@ -31,9 +29,6 @@ type ShadowsocksCipher struct {
 	seen   *ssSaltCache // only enabled for inbound streams
 }
 
-// NewShadowsocksCipher prepares a classic Shadowsocks AEAD cipher suite.
-// When inbound is true, the suite shares a replay cache across accepted connections.
-// It is independent of the application config and route packages.
 func NewShadowsocksCipher(method, password string, inbound bool) (*ShadowsocksCipher, error) {
 	keySize := 32
 	switch method {
@@ -53,7 +48,6 @@ func NewShadowsocksCipher(method, password string, inbound bool) (*ShadowsocksCi
 	return s, nil
 }
 
-// EVP_BytesToKey with MD5 and one iteration (legacy Shadowsocks key derivation).
 func ssEVPBytesToKey(password []byte, keyLen int) []byte {
 	key := make([]byte, 0, keyLen)
 	var last []byte
@@ -94,8 +88,6 @@ type ssSaltCache struct {
 	entries map[[sha256.Size]byte]time.Time
 }
 
-// Record only *authenticated* salts so attackers can't poison the replay cache
-// by sending arbitrary bytes. Bounded storage also avoids unbounded growth.
 func (c *ssSaltCache) accept(salt []byte) error {
 	if c == nil {
 		return nil
@@ -144,8 +136,6 @@ type ShadowsocksConn struct {
 	checked    bool
 }
 
-// NewShadowsocksConn wraps a transport in classic Shadowsocks TCP AEAD framing.
-// Keep one conn per TCP session; reuse the cipher suite across inbound sessions.
 func NewShadowsocksConn(conn net.Conn, suite *ShadowsocksCipher) *ShadowsocksConn {
 	return &ShadowsocksConn{Conn: conn, suite: suite}
 }

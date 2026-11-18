@@ -9,8 +9,8 @@ import (
 	"sync"
 )
 
+// Decode 返回值可能引用 buf；调用方在使用结束前不得修改或复用 buf。
 type Codec interface {
-	// Decode 返回值可能引用 buf；调用方在使用结束前不得修改或复用 buf。
 	Decode(src io.Reader, buf []byte) ([]byte, error)
 	Encode(dst io.Writer, src []byte) (int, error)
 }

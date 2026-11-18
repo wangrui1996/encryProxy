@@ -19,8 +19,7 @@ const (
 )
 
 
-// CloseOnCancel guards a bounded handshake. stop joins the watcher before the
-// connection is handed to its next owner (especially an HTTP connection pool).
+// 在 ctx 取消时关闭 conn，并返回一个 stop 函数用于停止监听并等待协程退出
 func CloseOnCancel(ctx context.Context, conn net.Conn) func() {
 	if ctx == nil {
 		ctx = context.Background()

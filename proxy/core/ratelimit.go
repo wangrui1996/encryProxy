@@ -13,6 +13,7 @@ type RateLimit struct {
 	downloadLimiter *rate.Limiter
 }
 
+// 按上传/下载带宽（KB/s）创建限速器，值为 0 的方向不启用限速
 func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 	r := &RateLimit{}
 	if UploadKbps > 0 {
@@ -24,8 +25,6 @@ func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 	return r
 }
 
-// RateLimitedConn can change its rate-limit policy after protocol auth.
-// The limiter itself is shared between all sessions using the same account.
 type RateLimitedConn struct {
 	net.Conn
 	current atomic.Pointer[RateLimit]
@@ -33,10 +32,12 @@ type RateLimitedConn struct {
 	cancel  context.CancelFunc
 }
 
+// 用默认 context.Background() 包装连接并设置初始限速策略
 func NewRateLimitedConn(conn net.Conn, limit *RateLimit) *RateLimitedConn {
 	return NewRateLimitedConnWithContext(context.Background(), conn, limit)
 }
 
+// 绑定调用方的 parent context，便于取消时中断限速等待
 func NewRateLimitedConnWithContext(parent context.Context, conn net.Conn, limit *RateLimit) *RateLimitedConn {
 	if parent == nil {
 		parent = context.Background()
@@ -67,7 +68,6 @@ func waitN(ctx context.Context, limiter *rate.Limiter, n int) error {
 	return nil
 }
 
-// Read counts incoming bytes against the configured upload bandwidth.
 func (c *RateLimitedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
@@ -80,7 +80,6 @@ func (c *RateLimitedConn) Read(b []byte) (int, error) {
 	return n, err
 }
 
-// Write counts outgoing bytes against the configured download bandwidth.
 func (c *RateLimitedConn) Write(b []byte) (int, error) {
 	if limit := c.current.Load(); limit != nil {
 		if err := waitN(c.ctx, limit.downloadLimiter, len(b)); err != nil {

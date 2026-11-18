@@ -9,7 +9,7 @@ import (
 	"sync"
 )
 
-// closeWrite propagates TCP half-closes where available.
+// 在支持的情况下传播 TCP 半关闭
 func closeWrite(c net.Conn) {
 	if cw, ok := c.(interface {
 		CloseWrite() error
@@ -22,10 +22,7 @@ func closeWrite(c net.Conn) {
 	}
 }
 
-// copyWithBuffer 使用全局缓冲池执行数据复制。
-//
-// 缓冲区在整个复制过程中独占，复制结束后归还。
-// io.CopyBuffer 保留 io.Copy 的标准复制语义。
+// 使用全局缓冲池执行数据复制，复制结束后归还缓冲区。
 func copyWithBuffer(dst io.Writer, src io.Reader) (int64, error) {
 	buf := getCopyBuffer()
 	defer putCopyBuffer(buf)
@@ -38,7 +35,7 @@ func Relay(downstream net.Conn, downReader io.Reader, upstream net.Conn, upReade
 	return RelayContext(context.Background(), downstream, downReader, upstream, upReader)
 }
 
-// RelayContext preserves half-close on EOF and closes both ends on cancellation.
+// 在双向复制数据时保留 TCP 半关闭语义，并在 ctx 取消或出错时关闭两端连接。
 func RelayContext(ctx context.Context, downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error {
 	if ctx == nil {
 		ctx = context.Background()
