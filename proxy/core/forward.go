@@ -27,8 +27,8 @@ func closeWrite(c net.Conn) {
 // 缓冲区在整个复制过程中独占，复制结束后归还。
 // io.CopyBuffer 保留 io.Copy 的标准复制语义。
 func copyWithBuffer(dst io.Writer, src io.Reader) (int64, error) {
-	buf := GetCopyBuffer()
-	defer PutCopyBuffer(buf)
+	buf := getCopyBuffer()
+	defer putCopyBuffer(buf)
 
 	return io.CopyBuffer(dst, src, buf)
 }

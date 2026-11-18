@@ -280,8 +280,8 @@ func (s *ShadowsocksConn) Write(p []byte) (int, error) {
 	if err := s.initWriter(); err != nil {
 		return 0, err
 	}
-	scratch := GetCopyBuffer()
-	defer PutCopyBuffer(scratch)
+	scratch := getCopyBuffer()
+	defer putCopyBuffer(scratch)
 	total := 0
 	for len(p) > 0 {
 		n := len(p)
