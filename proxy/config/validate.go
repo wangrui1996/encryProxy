@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-// Validator 定义配置校验接口。
-type Validator interface {
-	Validate() error
-}
-
 // DNS 配置校验。
 func (c *DNSConfig) Validate() error {
 	// DNS 配置允许不配置。

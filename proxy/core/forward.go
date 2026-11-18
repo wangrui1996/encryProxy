@@ -30,11 +30,6 @@ func copyWithBuffer(dst io.Writer, src io.Reader) (int64, error) {
 	return io.CopyBuffer(dst, src, buf)
 }
 
-// 使用全局缓冲池，避免每次创建连接都分配新的复制缓冲区。
-func Relay(downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error {
-	return RelayContext(context.Background(), downstream, downReader, upstream, upReader)
-}
-
 // 在双向复制数据时保留 TCP 半关闭语义，并在 ctx 取消或出错时关闭两端连接。
 func RelayContext(ctx context.Context, downstream net.Conn, downReader io.Reader, upstream net.Conn, upReader io.Reader) error {
 	if ctx == nil {

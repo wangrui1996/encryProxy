@@ -133,17 +133,6 @@ func (w *WebServer) Start() error {
 	return nil
 }
 
-// Run retains the original blocking entry point.
-func (w *WebServer) Run() {
-	if err := w.Start(); err != nil {
-		Logger.Errorf("web start: %v", err)
-		return
-	}
-	if err := w.Wait(); err != nil {
-		Logger.Errorf("web serve: %v", err)
-	}
-}
-
 func (w *WebServer) Wait() error {
 	w.mu.Lock()
 	started := w.started

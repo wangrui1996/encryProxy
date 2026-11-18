@@ -76,11 +76,6 @@ func (m *AccountManager) AuthenticateProxy(username, password string) (*Account,
 	return m.authenticate(username, password, false)
 }
 
-// Authenticate 保留旧方法名，语义等同于 AuthenticateCrypto。
-func (m *AccountManager) Authenticate(username, password string) (*Account, error) {
-	return m.AuthenticateCrypto(username, password)
-}
-
 func (m *AccountManager) Count() int {
 	if m == nil {
 		return 0

@@ -101,17 +101,6 @@ func (p *Proxy) Start() error {
 	return nil
 }
 
-// Run retains the blocking entry point for existing callers.
-func (p *Proxy) Run() {
-	if err := p.Start(); err != nil {
-		Logger.Errorf("%v", err)
-		return
-	}
-	if err := p.Wait(); err != nil {
-		Logger.Errorf("%v", err)
-	}
-}
-
 func (p *Proxy) serve(listener net.Listener) {
 	defer close(p.serveDone)
 	defer listener.Close()

@@ -32,11 +32,6 @@ func NewRateLimit(UploadKbps, DownloadKbps int) *RateLimit {
 	return r
 }
 
-// 用默认 context.Background() 包装连接并设置初始限速策略
-func NewRateLimitedConn(conn net.Conn, limit *RateLimit) *RateLimitedConn {
-	return NewRateLimitedConnWithContext(context.Background(), conn, limit)
-}
-
 // 绑定调用方的 parent context，便于取消时中断限速等待
 func NewRateLimitedConnWithContext(parent context.Context, conn net.Conn, limit *RateLimit) *RateLimitedConn {
 	if parent == nil {
