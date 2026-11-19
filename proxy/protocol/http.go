@@ -38,6 +38,13 @@ func (h *HTTP) Handle(ctx context.Context, conn net.Conn, authenticate Authentic
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// 只有内核确认 NAT REDIRECT、并且显式启用 sniff 时才处理原始 TCP；
+	// 其它连接继续使用原来的 HTTP/CONNECT 代理协议解析。
+	if h.Inbound.HTTP.Sniff {
+		if original, ok := originalDestinationFromContext(ctx); ok {
+			return h.handleSniff(ctx, conn, original)
+		}
+	}
 	limiter := newHTTPHeaderLimiter(conn, maxHTTPHeaderBytes)
 	reader := bufio.NewReaderSize(limiter, 32*1024)
 	for {

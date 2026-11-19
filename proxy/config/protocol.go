@@ -8,6 +8,7 @@ type HTTPConfig struct {
 	AuthRequired bool   `json:"auth_required"`
 	Account      string `json:"account,omitempty"`
 	Passwd       string `json:"passwd,omitempty"`
+	Sniff        bool   `json:"sniff,omitempty"` // 仅入站: 同端口兼容 HTTP 代理与 NAT 透明 TCP 嗅探
 }
 
 // Shadowsocks 自带密码认证，与外层 crypto 独立，可同时配置。
@@ -56,6 +57,9 @@ func validateProtocol(protocol string, http *HTTPConfig, shadowsocks *Shadowsock
 			return fmt.Errorf("http must not configure shadowsocks")
 		}
 		if outbound {
+			if http.Sniff {
+				return fmt.Errorf("http sniff is only supported for inbounds")
+			}
 			if http.AuthRequired && (http.Account == "" || http.Passwd == "") {
 				return fmt.Errorf("http authentication requires account and passwd")
 			}

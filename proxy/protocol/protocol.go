@@ -57,6 +57,7 @@ type HTTPOptions struct {
 	AuthRequired bool
 	Account      string
 	Passwd       string
+	Sniff        bool
 }
 
 type ShadowsocksOptions struct {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"strconv"
 
 	"wangjui.com/enproxy/proxy/config"
 	"wangjui.com/enproxy/proxy/core"
@@ -213,6 +214,14 @@ func (p *Proxy) Close() {
 func (p *Proxy) handleConnection(inboundConn net.Conn) {
 	ctx, cancel := context.WithCancel(p.ctx)
 	defer cancel()
+	// 必须在原始 socket 上获取 NAT 目标；限速/统计/加密连接包装后无法调用 getsockopt。
+	// 未经 REDIRECT 的普通 HTTP 正向代理连接保留原来的处理流程。
+	if p.inbound.Protocol == "http" && p.inbound.HTTP != nil && p.inbound.HTTP.Sniff {
+		original, err := originalDestination(inboundConn)
+		if err == nil && isRedirectedDestination(inboundConn, original) {
+			ctx = protocol.WithOriginalDestination(ctx, original)
+		}
+	}
 	accountName := "anonymous"
 	var cryptoAccount *Account
 	if p.inbound.Crypto != nil && p.inbound.Crypto.AuthRequired {
@@ -279,7 +288,7 @@ func protocolHTTPOptions(cfg *config.HTTPConfig) *protocol.HTTPOptions {
 	if cfg == nil {
 		return nil
 	}
-	return &protocol.HTTPOptions{AuthRequired: cfg.AuthRequired, Account: cfg.Account, Passwd: cfg.Passwd}
+	return &protocol.HTTPOptions{AuthRequired: cfg.AuthRequired, Account: cfg.Account, Passwd: cfg.Passwd, Sniff: cfg.Sniff}
 }
 
 func protocolShadowsocksOptions(cfg *config.ShadowsocksConfig) *protocol.ShadowsocksOptions {
@@ -291,4 +300,24 @@ func protocolShadowsocksOptions(cfg *config.ShadowsocksConfig) *protocol.Shadows
 
 func protocolInboundOptions(in config.InboundConfig) protocol.InboundOptions {
 	return protocol.InboundOptions{Tag: in.Tag, Protocol: in.Protocol, HTTP: protocolHTTPOptions(in.HTTP), Shadowsocks: protocolShadowsocksOptions(in.Shadowsocks)}
+}
+
+// isRedirectedDestination prevents interpreting a regular explicit HTTP proxy
+// connection as a transparent connection when SO_ORIGINAL_DST happens to return
+// the socket's own destination (e.g. Linux without NAT interception).
+func isRedirectedDestination(conn net.Conn, original string) bool {
+	host, port, err := net.SplitHostPort(original)
+	if err != nil {
+		return false
+	}
+	origIP := net.ParseIP(host)
+	origPort, err := strconv.Atoi(port)
+	if err != nil || origIP == nil || origPort < 1 || origPort > 65535 {
+		return false
+	}
+	local, ok := conn.LocalAddr().(*net.TCPAddr)
+	if !ok || local == nil || local.IP == nil {
+		return false
+	}
+	return origPort != local.Port || !origIP.Equal(local.IP)
 }

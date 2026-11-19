@@ -132,7 +132,7 @@ func newProxyManagerFromConfig(cfg config.Config, ruleBaseDir string) (*ProxyMan
 		if inbound.Shadowsocks != nil {
 			method = inbound.Shadowsocks.Method
 		}
-		Logger.Infof("inbound initialized: tag=%q listen=%q protocol=%q crypto=%t crypto_auth_required=%t http_auth_required=%t ss_method=%q upload_kbps=%d download_kbps=%d", inbound.Tag, inbound.Listen, inbound.Protocol, inbound.Crypto != nil, inbound.Crypto != nil && inbound.Crypto.AuthRequired, inbound.HTTP != nil && inbound.HTTP.AuthRequired, method, inbound.RateLimit.UploadKbps, inbound.RateLimit.DownloadKbps)
+		Logger.Infof("inbound initialized: tag=%q listen=%q protocol=%q crypto=%t crypto_auth_required=%t http_auth_required=%t http_sniff=%t ss_method=%q upload_kbps=%d download_kbps=%d", inbound.Tag, inbound.Listen, inbound.Protocol, inbound.Crypto != nil, inbound.Crypto != nil && inbound.Crypto.AuthRequired, inbound.HTTP != nil && inbound.HTTP.AuthRequired, inbound.HTTP != nil && inbound.HTTP.Sniff, method, inbound.RateLimit.UploadKbps, inbound.RateLimit.DownloadKbps)
 	}
 
 	// 仅按路由引用判断是否使用；未引用的入站仍监听、未引用的出站仍可用。
