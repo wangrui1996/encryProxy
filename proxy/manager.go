@@ -50,7 +50,7 @@ func NewProxyManager(configPath string) (*ProxyManager, error) {
 		return nil, fmt.Errorf("load config failed: %w", err)
 	}
 
-	manager, err := NewProxyManagerFromConfig(*cfg)
+	manager, err := newProxyManagerFromConfig(*cfg, filepath.Dir(absPath))
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +65,10 @@ func NewProxyManager(configPath string) (*ProxyManager, error) {
 // NewProxyManagerFromConfig 允许测试或其他代码直接使用已解析的配置。
 // 与从文件创建一样，TrafficManager 也在这里自动创建和托管。
 func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
+	return newProxyManagerFromConfig(cfg, ".")
+}
+
+func newProxyManagerFromConfig(cfg config.Config, ruleBaseDir string) (*ProxyManager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -89,7 +93,7 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 		return nil, fmt.Errorf("initialize account manager: %w", err)
 	}
 
-	manager.routeManager, err = route.NewManager(routeRules(cfg.Route))
+	manager.routeManager, err = route.NewManager(routeRules(cfg.Route), ruleBaseDir)
 	if err != nil {
 		return nil, fmt.Errorf("initialize route manager: %w", err)
 	}
