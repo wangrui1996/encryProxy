@@ -1,72 +1,40 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
 	"os"
-	"path/filepath"
+	"os/signal"
+	"syscall"
 
-	com "wangjui.com/enproxy/common"
 	"wangjui.com/enproxy/proxy"
+	"wangjui.com/enproxy/proxy/common"
 )
 
-var cfg proxy.Config
-
-func readConfig(cfg *proxy.Config) error {
-	configFileName := "config.json"
-
-	if len(os.Args) > 1 {
-		configFileName = os.Args[1]
-	}
-
-	absPath, err := filepath.Abs(configFileName)
-	if err != nil {
-		return fmt.Errorf("resolve config path failed: %w", err)
-	}
-
-	com.Log.Infof("Loading config: %s", absPath)
-
-	configFile, err := os.Open(absPath)
-	if err != nil {
-		return fmt.Errorf("open config file failed: %w", err)
-	}
-	defer configFile.Close()
-
-	jsonParser := json.NewDecoder(configFile)
-
-	if err := jsonParser.Decode(cfg); err != nil {
-		return fmt.Errorf("decode config failed: %w", err)
-	}
-
-	return nil
-}
-
 func main() {
-	// 初始化日志。
-	com.InitLogger("enproxy", "debug")
-
-	// 加载配置。
-	if err := readConfig(&cfg); err != nil {
-		com.Log.Fatalf("load config failed: %v", err)
+	// 保留项目现有日志初始化方式。
+	common.InitLogger("enproxy", "debug")
+	common.Log.Infof("enproxy version: %s", proxy.VERSION)
+	configPath := "config.json"
+	if len(os.Args) > 1 {
+		configPath = os.Args[1]
 	}
 
-	// 创建流量统计管理器。
-	trafficManager := proxy.NewTrafficManager()
-
-	// 创建代理管理器。
-	proxyManager, err := proxy.NewProxyManager(cfg, trafficManager)
+	// 只传配置文件路径：账号、路由、DNS、流量统计和全部入站代理
+	// 都在 ProxyManager 内部创建，不再由 main 逐项组装。
+	proxyManager, err := proxy.NewProxyManager(configPath)
 	if err != nil {
-		com.Log.Fatalf("create proxy manager failed: %v", err)
+		common.Log.Fatalf("initialize proxy manager failed: %v", err)
 	}
+	defer proxyManager.Close()
 
-	// 启动流量统计。
-	go trafficManager.Start()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// 启动所有代理入口，以及配置中启用的 Web Dashboard。
-	proxyManager.Start()
+	if err := proxyManager.Start(); err != nil {
+		common.Log.Fatalf("start proxy manager failed: %v", err);
+	}
+	common.Log.Infof("enproxy startup initiated: %d inbounds", proxyManager.Count())
 
-	com.Log.Infof("started %d proxy instances", proxyManager.Count())
-
-	// 阻塞主线程，防止程序退出。
-	select {}
+	<-ctx.Done()
+	common.Log.Info("shutdown signal received, stopping enproxy")
 }

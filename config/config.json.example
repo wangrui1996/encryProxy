@@ -1,52 +1,19 @@
 {
-  "web": {
-    "enabled": true,
-    "listen": "0.0.0.0:19998"
-  },
+  "log": { "level": "info", "path": "enproxy.log", "access": "access.log" },
+  "web": { "enabled": false },
   "inbounds": [
     {
       "tag": "in-12348",
       "listen": "0.0.0.0:12348",
-      "auth_required": false,
-      "crypto": {
-        "enabled": false,
-        "key": "GIF34US6WlaL4Ayx"
-      },
-      "rate_limit": {
-        "up_kbps": 512,
-        "down_kbps": 0
-      }
+      "protocol": "tcp",
+      "rate_limit": { "up_kbps": 0, "down_kbps": 0 }
     }
   ],
   "outbounds": [
-    {
-      "tag": "out-3022",
-      "protocol": "tcp",
-      "server": "10.44.0.10:3022",
-      "crypto": {
-        "enabled": false,
-        "key": ""
-      }
-    }
+    { "tag": "out-3022", "protocol": "tcp", "server": "10.44.0.10:3022" }
   ],
-  "accounts": [
-    {
-      "name": "user_a",
-      "password": "password_a",
-      "enabled": true,
-      "rate_limit": {
-        "up_kbps": 100,
-        "down_kbps": 200
-      }
-    }
-  ],
-  "route": {
-    "default": "out-3022",
-    "rules": [
-      {
-        "inbound": ["in-12348"],
-        "outbound": "out-3022"
-      }
-    ]
-  }
+  "accounts": [],
+  "route": [
+    { "type": "relay", "inbound": ["in-12348"], "rule": { "outbound": "out-3022" } }
+  ]
 }
