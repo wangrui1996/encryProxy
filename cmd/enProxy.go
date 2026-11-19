@@ -30,7 +30,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	proxyManager.Start()
+	if err := proxyManager.Start(); err != nil {
+		common.Log.Fatalf("start proxy manager failed: %v", err);
+	}
 	common.Log.Infof("enproxy startup initiated: %d inbounds", proxyManager.Count())
 
 	<-ctx.Done()

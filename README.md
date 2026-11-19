@@ -171,8 +171,6 @@ curl -x http://127.0.0.1:18080 -I https://example.com/
 
 第二个请求通过 HTTP `CONNECT` 建立 HTTPS 隧道，不会在代理中解密客户端与目标站点之间的 TLS 内容。默认情况下入口程序未传参数时读取当前工作目录的 `config.json`。可通过 `Ctrl+C` 或 `SIGTERM` 触发关闭。
 
-> **启动检查：** 上传的 `enProxy.go` 中调用了 `proxyManager.Start()`，但没有处理其返回错误。实际部署前建议将这行改为 `if err := proxyManager.Start(); err != nil { common.Log.Fatalf("start proxy manager failed: %v", err) }`，以免端口绑定失败仍出现误导性启动日志。
-
 ## 配置说明
 
 ### 顶层结构
