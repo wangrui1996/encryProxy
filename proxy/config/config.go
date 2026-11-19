@@ -37,10 +37,6 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("config is nil")
 	}
 
-	if len(cfg.Inbounds) == 0 {
-		return fmt.Errorf("no inbound configured")
-	}
-
 	if err := cfg.Log.Validate(); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
@@ -71,9 +67,6 @@ func (cfg *Config) Validate() error {
 	}
 
 	// Route
-	if len(cfg.Route) == 0 {
-		return fmt.Errorf("no route configured")
-	}
 	for i := range cfg.Route {
 		if err := cfg.Route[i].Validate(); err != nil {
 			return fmt.Errorf("route[%d]: %w", i, err)
@@ -141,12 +134,9 @@ func (cfg *Config) validateReferences() error {
 				return fmt.Errorf("relay route[%d] requires tcp outbound %q", i, tag)
 			}
 			if route.Type == "proxy" {
-				if tag == route.Proxy.DefaultOutbound && protocol != "freedom" && protocol != "blackhole" {
-					return fmt.Errorf("proxy route[%d]: default outbound %q must be freedom or blackhole", i, tag)
-				}
 				switch protocol {
-				case "freedom", "blackhole", "http", "shadowsocks":
-					// 支持直连、静默丢弃、HTTP 和 Shadowsocks 上游。
+				case "freedom", "blackhole", "tcp", "http", "shadowsocks":
+					// 支持所有可配置的出站协议；TCP 仅连接固定的 Server。
 				default:
 					return fmt.Errorf("proxy route[%d]: outbound %q protocol %q is not implemented for proxy routing", i, tag, protocol)
 				}
@@ -163,9 +153,6 @@ func (cfg *Config) validateReferences() error {
 
 	for i := range cfg.Inbounds {
 		inbound := &cfg.Inbounds[i]
-		if !routed[inbound.Tag] {
-			return fmt.Errorf("inbound %q has no route", inbound.Tag)
-		}
 		if inbound.Crypto != nil && inbound.Crypto.AuthRequired && !hasCryptoAccount {
 			return fmt.Errorf("inbound %q requires a crypto-enabled account", inbound.Tag)
 		}

@@ -108,6 +108,11 @@ func (m inboundOutbounds) NewHTTPTransport(tag string) (*http.Transport, error) 
 	switch out.kind {
 	case "http":
 		return (protocol.HTTPClient{Dial: dial}).Transport(&out.options)
+	case "tcp":
+		// TCP 固定出口不解析目标地址，只连接已配置的上游 Server。
+		return protocol.NewDirectHTTPTransport(func(ctx context.Context, _ string) (net.Conn, error) {
+			return dial(ctx, out.options.Server)
+		}, false), nil
 	case "freedom":
 		return protocol.NewDirectHTTPTransport(dial, true), nil
 	case "shadowsocks":

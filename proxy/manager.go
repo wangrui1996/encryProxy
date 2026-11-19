@@ -110,12 +110,55 @@ func NewProxyManagerFromConfig(cfg config.Config) (*ProxyManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize outbound manager: %w", err)
 	}
+	Logger.Infof("built-in outbounds initialized: freedom, blackhole")
+	for _, outbound := range cfg.Outbounds {
+		method := ""
+		if outbound.Shadowsocks != nil {
+			method = outbound.Shadowsocks.Method
+		}
+		Logger.Infof("outbound initialized: tag=%q protocol=%q server=%q crypto=%t crypto_auth_required=%t http_auth_required=%t ss_method=%q", outbound.Tag, outbound.Protocol, outbound.Server, outbound.Crypto != nil, outbound.Crypto != nil && outbound.Crypto.AuthRequired, outbound.HTTP != nil && outbound.HTTP.AuthRequired, method)
+	}
 	for _, inbound := range cfg.Inbounds {
 		proxyInstance, err := NewProxy(inbound, manager.accountManager, manager.routeManager, outbounds, manager.trafficManager)
 		if err != nil {
 			return nil, fmt.Errorf("initialize inbound %q: %w", inbound.Tag, err)
 		}
 		manager.proxies = append(manager.proxies, proxyInstance)
+		method := ""
+		if inbound.Shadowsocks != nil {
+			method = inbound.Shadowsocks.Method
+		}
+		Logger.Infof("inbound initialized: tag=%q listen=%q protocol=%q crypto=%t crypto_auth_required=%t http_auth_required=%t ss_method=%q upload_kbps=%d download_kbps=%d", inbound.Tag, inbound.Listen, inbound.Protocol, inbound.Crypto != nil, inbound.Crypto != nil && inbound.Crypto.AuthRequired, inbound.HTTP != nil && inbound.HTTP.AuthRequired, method, inbound.RateLimit.UploadKbps, inbound.RateLimit.DownloadKbps)
+	}
+
+	// 仅按路由引用判断是否使用；未引用的入站仍监听、未引用的出站仍可用。
+	usedInbounds := make(map[string]bool, len(cfg.Inbounds))
+	usedOutbounds := make(map[string]bool, len(cfg.Outbounds))
+	for i, rule := range cfg.Route {
+		for _, tag := range rule.Inbound {
+			usedInbounds[tag] = true
+		}
+		if rule.Type == "relay" {
+			usedOutbounds[rule.Relay.Outbound] = true
+			Logger.Infof("route[%d] initialized: type=relay inbound=%v outbound=%q", i, rule.Inbound, rule.Relay.Outbound)
+		} else {
+			usedOutbounds[rule.Proxy.DefaultOutbound] = true
+			Logger.Infof("route[%d] initialized: type=proxy inbound=%v default_outbound=%q policies=%d", i, rule.Inbound, rule.Proxy.DefaultOutbound, len(rule.Proxy.Policies))
+			for j, policy := range rule.Proxy.Policies {
+				usedOutbounds[policy.Outbound] = true
+				Logger.Infof("route[%d] policy[%d]: domain=%v outbound=%q", i, j, policy.Domain, policy.Outbound)
+			}
+		}
+	}
+	for _, inbound := range cfg.Inbounds {
+		if !usedInbounds[inbound.Tag] {
+			Logger.Warnf("inbound %q has no route (listening, but cannot forward connections)", inbound.Tag)
+		}
+	}
+	for _, outbound := range cfg.Outbounds {
+		if !usedOutbounds[outbound.Tag] {
+			Logger.Warnf("outbound %q is not referenced by any route", outbound.Tag)
+		}
 	}
 
 	// WebServer 在构造阶段创建，Start 仅负责启动。

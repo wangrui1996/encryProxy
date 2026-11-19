@@ -78,7 +78,7 @@ func normalizeDomain(domain string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 }
 
-// ResolveProxy 按策略顺序匹配，未命中时使用必填的 freedom/blackhole 默认出站。
+// ResolveProxy 按策略顺序匹配，未命中时使用配置的默认出站。
 // example.com 可命中 a.example.com，不会命中 fakeexample.com。
 func (m *Manager) ResolveProxy(inboundTag, hostname string) (string, error) {
 	if m == nil {
