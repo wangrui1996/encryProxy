@@ -1,4 +1,4 @@
-module wangjui.com/enproxy
+module wangjui.com/spider
 
 go 1.26.0
 

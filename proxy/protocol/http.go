@@ -11,7 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"wangjui.com/enproxy/proxy/core"
+
+	"wangjui.com/spider/proxy/core"
 )
 
 // HTTP implements the inbound HTTP forward proxy: ordinary HTTP requests

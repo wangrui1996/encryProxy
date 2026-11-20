@@ -7,9 +7,9 @@ import (
 	"net"
 	"net/http"
 
-	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/core"
-	"wangjui.com/enproxy/proxy/protocol"
+	"wangjui.com/spider/proxy/config"
+	"wangjui.com/spider/proxy/core"
+	"wangjui.com/spider/proxy/protocol"
 )
 
 // OutboundManager 持有所有入口共享的出站表和底层拨号器。

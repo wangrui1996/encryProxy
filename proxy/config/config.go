@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// Config 是 enproxy 的完整运行配置。
+// Config 是 spider 的完整运行配置。
 type Config struct {
 	Log       LogConfig        `json:"log"`
 	Inbounds  []InboundConfig  `json:"inbounds"`

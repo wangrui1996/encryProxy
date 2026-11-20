@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"wangjui.com/enproxy/proxy/core"
+	"wangjui.com/spider/proxy/core"
 )
 
 // ShadowsocksClient dials an upstream Shadowsocks server and sends the

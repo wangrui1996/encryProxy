@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"wangjui.com/enproxy/proxy/dns"
+	"wangjui.com/spider/proxy/dns"
 )
 
 const happyEyeballsDelay = 250 * time.Millisecond

@@ -6,14 +6,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"wangjui.com/enproxy/proxy"
-	"wangjui.com/enproxy/proxy/common"
+	"wangjui.com/spider/proxy"
+	"wangjui.com/spider/proxy/common"
 )
 
 func main() {
 	// 保留项目现有日志初始化方式。
-	common.InitLogger("enproxy", "debug")
-	common.Log.Infof("enproxy version: %s", proxy.VERSION)
+	common.InitLogger("", "debug")
+	common.Log.Infof("spider version: %s", proxy.VERSION)
 	configPath := "config.json"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
@@ -31,10 +31,10 @@ func main() {
 	defer stop()
 
 	if err := proxyManager.Start(); err != nil {
-		common.Log.Fatalf("start proxy manager failed: %v", err);
+		common.Log.Fatalf("start proxy manager failed: %v", err)
 	}
-	common.Log.Infof("enproxy startup initiated: %d inbounds", proxyManager.Count())
+	common.Log.Infof("spider startup initiated: %d inbounds", proxyManager.Count())
 
 	<-ctx.Done()
-	common.Log.Info("shutdown signal received, stopping enproxy")
+	common.Log.Info("shutdown signal received, stopping spider")
 }

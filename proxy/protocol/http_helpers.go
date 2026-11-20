@@ -98,7 +98,7 @@ func writeHTTPError(conn net.Conn, code int) error {
 func writeProxyAuthRequired(conn net.Conn) error {
 	_ = conn.SetWriteDeadline(time.Now().Add(httpErrorWriteTimeout))
 	defer conn.SetWriteDeadline(time.Time{})
-	_, err := io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"enproxy\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+	_, err := io.WriteString(conn, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"spider\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 	return err
 }
 

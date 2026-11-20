@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	"wangjui.com/enproxy/proxy/core"
+	"wangjui.com/spider/proxy/core"
 )
 
 // HTTPClient implements the HTTP upstream proxy transport (client side).
