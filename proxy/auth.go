@@ -7,8 +7,8 @@ import (
 	"net"
 	"time"
 
-	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/core"
+	"wangjui.com/spider/proxy/config"
+	"wangjui.com/spider/proxy/core"
 )
 
 const (

@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
-	"strconv"
 
-	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/core"
-	"wangjui.com/enproxy/proxy/protocol"
-	"wangjui.com/enproxy/proxy/route"
-	"wangjui.com/enproxy/proxy/stat"
+	"wangjui.com/spider/proxy/config"
+	"wangjui.com/spider/proxy/core"
+	"wangjui.com/spider/proxy/protocol"
+	"wangjui.com/spider/proxy/route"
+	"wangjui.com/spider/proxy/stat"
 )
 
 // Proxy 管理一个入站监听端口及其连接的公共处理逻辑。

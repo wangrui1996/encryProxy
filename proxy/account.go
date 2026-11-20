@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/core"
+	"wangjui.com/spider/proxy/config"
+	"wangjui.com/spider/proxy/core"
 )
 
 // Account 是认证成功后的运行时账号，账号级限速器为所有连接共享。

@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"wangjui.com/enproxy/proxy/common"
-	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/stat"
+	"wangjui.com/spider/proxy/common"
+	"wangjui.com/spider/proxy/config"
+	"wangjui.com/spider/proxy/stat"
 )
 
 var Logger = common.Log
@@ -269,7 +269,7 @@ func (w *WebServer) handleLimits(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
-const sessionCookie = "enproxy_session"
+const sessionCookie = "spider_session"
 const sessionTTL = 12 * time.Hour
 
 func (w *WebServer) authenticated(r *http.Request) bool {
@@ -318,7 +318,7 @@ func authPost(rw http.ResponseWriter, r *http.Request) bool {
 		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
 		return false
 	}
-	if r.Header.Get("X-ENProxy-Auth") != "1" || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+	if r.Header.Get("X-Spider-Auth") != "1" || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		http.Error(rw, "forbidden", http.StatusForbidden)
 		return false
 	}

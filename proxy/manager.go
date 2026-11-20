@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"wangjui.com/enproxy/proxy/config"
-	"wangjui.com/enproxy/proxy/dns"
-	"wangjui.com/enproxy/proxy/route"
-	"wangjui.com/enproxy/proxy/stat"
-	"wangjui.com/enproxy/proxy/web"
+	"wangjui.com/spider/proxy/config"
+	"wangjui.com/spider/proxy/dns"
+	"wangjui.com/spider/proxy/route"
+	"wangjui.com/spider/proxy/stat"
+	"wangjui.com/spider/proxy/web"
 )
 
 type ProxyManager struct {

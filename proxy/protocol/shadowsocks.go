@@ -7,7 +7,7 @@ import (
 	"net"
 	"time"
 
-	"wangjui.com/enproxy/proxy/core"
+	"wangjui.com/spider/proxy/core"
 )
 
 // Shadowsocks is an inbound classic AEAD Shadowsocks TCP server.
