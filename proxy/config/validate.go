@@ -27,6 +27,18 @@ func (c *DNSConfig) Validate() error {
 	if ttl <= 0 {
 		return fmt.Errorf("cache_ttl must be greater than zero")
 	}
+	if c.CacheMaxBytes < 0 {
+		return fmt.Errorf("cache_max_bytes must not be negative")
+	}
+	if c.CacheFile != "" && strings.TrimSpace(c.CacheFile) == "" {
+		return fmt.Errorf("cache_file must not be blank")
+	}
+	if c.CacheFile == "" && c.CacheMaxBytes != 0 {
+		return fmt.Errorf("cache_max_bytes requires cache_file")
+	}
+	if c.CacheFile != "" && c.CacheMaxBytes > 0 && c.CacheMaxBytes < 128 {
+		return fmt.Errorf("cache_max_bytes must be at least 128")
+	}
 
 	return nil
 }

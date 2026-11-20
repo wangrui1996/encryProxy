@@ -22,7 +22,9 @@ type LogConfig struct {
 }
 
 type DNSConfig struct {
-	CacheTTL string `json:"cache_ttl"`
+	CacheTTL      string `json:"cache_ttl"`
+	CacheFile     string `json:"cache_file,omitempty"`
+	CacheMaxBytes int64  `json:"cache_max_bytes,omitempty"`
 }
 
 type WebConfig struct {

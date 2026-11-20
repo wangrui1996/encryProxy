@@ -105,7 +105,16 @@ func newProxyManagerFromConfig(cfg config.Config, ruleBaseDir string) (*ProxyMan
 			return nil, fmt.Errorf("parse DNS cache TTL: %w", err)
 		}
 	}
-	manager.dnsResolver, err = dns.NewResolver(ttl)
+	var cacheFile string
+	var cacheMaxBytes int64
+	if cfg.DNS != nil {
+		cacheFile = cfg.DNS.CacheFile
+		cacheMaxBytes = cfg.DNS.CacheMaxBytes
+		if cacheFile != "" && !filepath.IsAbs(cacheFile) {
+			cacheFile = filepath.Join(ruleBaseDir, cacheFile)
+		}
+	}
+	manager.dnsResolver, err = dns.NewResolverWithCache(ttl, cacheFile, cacheMaxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("initialize DNS resolver: %w", err)
 	}
