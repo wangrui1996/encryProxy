@@ -14,7 +14,7 @@ import (
 
 const (
 	maxSniffBytes = 32 * 1024
-	sniffTimeout  = 1500 * time.Millisecond
+	sniffTimeout  = 300 * time.Millisecond
 )
 
 type sniffResult uint8
