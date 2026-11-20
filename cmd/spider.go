@@ -12,7 +12,7 @@ import (
 
 func main() {
 	// 保留项目现有日志初始化方式。
-	common.InitLogger("spider", "debug")
+	common.InitLogger("", "debug")
 	common.Log.Infof("spider version: %s", proxy.VERSION)
 	configPath := "config.json"
 	if len(os.Args) > 1 {
