@@ -1,35 +1,4 @@
 services:
-  smartdns:
-    # DNS_ENABLED=1 时名称为 dns-1，匹配自动启用的 COMPOSE_PROFILES=dns-1。
-    # DNS_ENABLED=0 时名称为 dns-0，不匹配，因此不会启动 SmartDNS。
-    profiles:
-      - "dns-${DNS_ENABLED:-1}"
-    image: pymumu/smartdns:latest
-    container_name: smartdns
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      TZ: Asia/Shanghai
-      LAN_IP: ${LAN_IP}
-      ENPROXY_PORT: ${ENPROXY_PORT:-18080}
-    # 启动时生成临时配置，无须挂载 smartdns.conf.template、entrypoint.sh。
-    # $$ 用于避免 Docker Compose 提前展开 Shell 环境变量。
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        cat > /tmp/smartdns.conf <<EOF
-        bind $${LAN_IP}:53
-        bind-tcp $${LAN_IP}:53
-        proxy-server http://$${LAN_IP}:$${ENPROXY_PORT} -name spider
-        cache-size 4096
-        speed-check-mode none
-        response-mode fastest-response
-        log-level info
-        server-https https://dns.google/dns-query -host-ip 8.8.8.8 -proxy spider
-        server-https https://cloudflare-dns.com/dns-query -host-ip 1.1.1.1 -proxy spider
-        EOF
-        exec /usr/sbin/smartdns -f -x -c /tmp/smartdns.conf
-
   spider:
     image: spider:${IMAGE_VERSION:?IMAGE_VERSION is required}-linux-${IMAGE_ARCH:?IMAGE_ARCH is required}
     container_name: spider

@@ -81,7 +81,8 @@ prepare_deploy() {
     chmod +x "$target/setup-host.sh"
 
     # 配置文件若存在则复制；不覆盖部署目录中已经调整过的配置。
-    # SmartDNS 由 Compose 在启动时自动生成配置，不再打包 smartdns 子目录。
+    # 清理历史构建产物中不再使用的 SmartDNS 配置目录。
+    rm -rf -- "$target/config/smartdns"
     if [[ -d "${DEPLOY_SOURCE}/config" ]]; then
         local item
         for item in "${DEPLOY_SOURCE}"/config/* "${DEPLOY_SOURCE}"/config/.[!.]* "${DEPLOY_SOURCE}"/config/..?*; do
@@ -94,9 +95,9 @@ prepare_deploy() {
     # 自动生成架构相关的 .env，重建时保留 LAN 等部署参数。
     env_temp="$(mktemp "${target}/.env.XXXXXX")"
     {
-        printf 'IMAGE_VERSION=%s\nIMAGE_ARCH=%s\nCOMPOSE_PROFILES=dns-1,netfilter-1\n' "$VERSION" "$suffix"
+        printf 'IMAGE_VERSION=%s\nIMAGE_ARCH=%s\n' "$VERSION" "$suffix"
         if [[ -f "$target/.env" ]]; then
-            awk '!/^IMAGE_VERSION=/ && !/^IMAGE_ARCH=/ && !/^COMPOSE_PROFILES=/' "$target/.env"
+            awk '!/^(IMAGE_VERSION|IMAGE_ARCH|COMPOSE_PROFILES|DNS_ENABLED)=/' "$target/.env"
         else
             cat "${DEPLOY_SOURCE}/env.exmples"
         fi
@@ -105,7 +106,7 @@ prepare_deploy() {
     mv -f "$env_temp" "$target/.env"
 
     {
-        printf 'IMAGE_VERSION=%s\nIMAGE_ARCH=%s\nCOMPOSE_PROFILES=dns-1,netfilter-1\n' "$VERSION" "$suffix"
+        printf 'IMAGE_VERSION=%s\nIMAGE_ARCH=%s\n' "$VERSION" "$suffix"
         cat "${DEPLOY_SOURCE}/env.exmples"
     } > "$target/.env.example"
 

@@ -6,7 +6,6 @@ LAN_IF="${LAN_IF:-eth1}"
 LAN_IP="${LAN_IP:-192.168.8.11}"
 LAN_CIDR="${LAN_CIDR:-192.168.8.0/24}"
 ENPROXY_PORT="${ENPROXY_PORT:-28080}"
-DNS_ENABLED="${DNS_ENABLED:-0}"
 BYPASS_CIDRS="${BYPASS_CIDRS:-10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16,224.0.0.0/4,240.0.0.0/4}"
 KEEP_FAIL_CLOSED="${KEEP_FAIL_CLOSED:-1}"
 NETWORK_WAIT_SECONDS="${NETWORK_WAIT_SECONDS:-60}"
@@ -227,14 +226,8 @@ setup_nat() {
     ipt -t nat -A "$NAT_CHAIN" ! -i "$LAN_IF" -j RETURN
     ipt -t nat -A "$NAT_CHAIN" ! -s "$LAN_CIDR" -j RETURN
 
-    # 仅启用 SmartDNS 时将客户端 DNS 请求重定向到宿主机 53 端口。
-    if [ "$DNS_ENABLED" = "1" ]; then
-        ipt -t nat -A "$NAT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports 53
-        ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports 53
-    else
-        # 关闭 SmartDNS 后，TCP 53 也应直连，避免进入通用 TCP 透明代理。
-        ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 53 -j RETURN
-    fi
+    # DNS 不交给透明 TCP 代理，TCP 53 保持直连；UDP 本来不会命中 TCP REDIRECT。
+    ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 53 -j RETURN
 
     add_bypass_rules nat "$NAT_CHAIN"
 
@@ -244,9 +237,8 @@ setup_nat() {
     ipt -t nat -I PREROUTING 1 -m comment --comment "$NAT_COMMENT" -j "$NAT_CHAIN"
 }
 
-# UDP 仍然由 Linux 内核直接路由，不经过 enproxy。
-# LAN 设备与主路由同网段，因此对公网 UDP 做 MASQUERADE，
-# 确保回包仍经过树莓派，连接状态保持对称。
+# 非 TCP 流量仍由 Linux 内核直接路由，不经过 enproxy。
+# 单网卡同网段旁路由对非 TCP 流量做 MASQUERADE，使返回流量继续经过树莓派。
 setup_udp_nat() {
     remove_udp_nat
 
@@ -254,17 +246,15 @@ setup_udp_nat() {
     ipt -t nat -A "$UDP_NAT_CHAIN" ! -o "$LAN_IF" -j RETURN
     ipt -t nat -A "$UDP_NAT_CHAIN" ! -s "$LAN_CIDR" -j RETURN
     ipt -t nat -A "$UDP_NAT_CHAIN" -d "$LAN_CIDR" -j RETURN
-    # 关闭 SmartDNS 时让直连 TCP DNS 的返回流量仍经过本机。
-    if [ "$DNS_ENABLED" = "0" ]; then
-        ipt -t nat -A "$UDP_NAT_CHAIN" -p tcp --dport 53 -j MASQUERADE
-    fi
-    ipt -t nat -A "$UDP_NAT_CHAIN" -p udp -j MASQUERADE
+    # DNS TCP 53 直连需要 SNAT，使回包继续经过本机。
+    ipt -t nat -A "$UDP_NAT_CHAIN" -p tcp --dport 53 -j MASQUERADE
+    ipt -t nat -A "$UDP_NAT_CHAIN" ! -p tcp -j MASQUERADE
 
     ipt -t nat -I POSTROUTING 1 -m comment --comment "$UDP_NAT_COMMENT" -j "$UDP_NAT_CHAIN"
 }
 
 # Docker 可能将宿主机 FORWARD 默认策略设为 DROP。
-# 放行 UDP 原路及回程、内网绕过流量；公网 TCP 若未被 REDIRECT 到本机 INPUT，
+# 放行非 TCP 原路及回程、内网绕过流量；公网 TCP 若未被 REDIRECT 到本机 INPUT，
 # 则拒绝转发，避免代理服务停止后 TCP 流量意外直连。
 setup_forward_rules() {
     remove_forward
@@ -272,11 +262,9 @@ setup_forward_rules() {
     ipt -t filter -N "$FWD_CHAIN"
 
     ipt -t filter -A "$FWD_CHAIN" -i "$LAN_IF" -o "$LAN_IF" -d "$LAN_CIDR" \
-        -p udp -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    if [ "$DNS_ENABLED" = "0" ]; then
-        ipt -t filter -A "$FWD_CHAIN" -i "$LAN_IF" -o "$LAN_IF" -d "$LAN_CIDR" \
-            -p tcp --sport 53 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    fi
+        ! -p tcp -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    ipt -t filter -A "$FWD_CHAIN" -i "$LAN_IF" -o "$LAN_IF" -d "$LAN_CIDR" \
+        -p tcp --sport 53 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     ipt -t filter -A "$FWD_CHAIN" ! -i "$LAN_IF" -j RETURN
     ipt -t filter -A "$FWD_CHAIN" ! -s "$LAN_CIDR" -j RETURN
@@ -294,11 +282,10 @@ setup_forward_rules() {
     IFS="$old_ifs"
 
     ipt -t filter -A "$FWD_CHAIN" -p udp -j ACCEPT
-    if [ "$DNS_ENABLED" = "0" ]; then
-        ipt -t filter -A "$FWD_CHAIN" -p tcp --dport 53 -j ACCEPT
-    fi
+    ipt -t filter -A "$FWD_CHAIN" -p tcp --dport 53 -j ACCEPT
     ipt -t filter -A "$FWD_CHAIN" -p tcp -j REJECT --reject-with tcp-reset
-    ipt -t filter -A "$FWD_CHAIN" -j RETURN
+    # 已匹配 LAN 接口/来源/出口，剩余 ICMP、GRE、ESP 等非 TCP 流量正常转发。
+    ipt -t filter -A "$FWD_CHAIN" -j ACCEPT
 
     ipt -t filter -I FORWARD 1 -m comment --comment "$FWD_COMMENT" -j "$FWD_CHAIN"
 }
@@ -381,11 +368,6 @@ main() {
         *) die "KEEP_FAIL_CLOSED 只能是 0 或 1" ;;
     esac
 
-    case "$DNS_ENABLED" in
-        0|1) ;;
-        *) die "DNS_ENABLED 只能是 0 或 1" ;;
-    esac
-
     ip link show dev "$LAN_IF" >/dev/null 2>&1 || die "网卡不存在：$LAN_IF"
 
     log "iptables 后端：$("$IPTABLES_BIN" --version)"
@@ -423,7 +405,7 @@ main() {
 
     log "透明 TCP 代理已启动。"
     log "LAN: $LAN_IF $LAN_CIDR；enproxy: $LAN_IP:$ENPROXY_PORT"
-    log "TCP NAT: $NAT_CHAIN -> $ENPROXY_PORT；UDP SNAT: $UDP_NAT_CHAIN；FORWARD: $FWD_CHAIN"
+    log "TCP NAT: $NAT_CHAIN -> $ENPROXY_PORT；非 TCP SNAT: $UDP_NAT_CHAIN；FORWARD: $FWD_CHAIN"
     log "普通 HTTP 代理与透明 TCP 连接共用 enproxy HTTP 入站；本容器不再启动 redsocks。"
 
     # 监控监听端口；若 enproxy 停止，则撤销 REDIRECT 并保留 fail-closed 规则。
