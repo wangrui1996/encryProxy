@@ -6,7 +6,7 @@ LAN_IF="${LAN_IF:-eth1}"
 LAN_IP="${LAN_IP:-192.168.8.11}"
 LAN_CIDR="${LAN_CIDR:-192.168.8.0/24}"
 ENPROXY_PORT="${ENPROXY_PORT:-28080}"
-DNS_ENABLED="${DNS_ENABLED:-1}"
+DNS_ENABLED="${DNS_ENABLED:-0}"
 BYPASS_CIDRS="${BYPASS_CIDRS:-10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16,224.0.0.0/4,240.0.0.0/4}"
 KEEP_FAIL_CLOSED="${KEEP_FAIL_CLOSED:-1}"
 NETWORK_WAIT_SECONDS="${NETWORK_WAIT_SECONDS:-60}"
@@ -231,6 +231,9 @@ setup_nat() {
     if [ "$DNS_ENABLED" = "1" ]; then
         ipt -t nat -A "$NAT_CHAIN" -p udp --dport 53 -j REDIRECT --to-ports 53
         ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports 53
+    else
+        # 关闭 SmartDNS 后，TCP 53 也应直连，避免进入通用 TCP 透明代理。
+        ipt -t nat -A "$NAT_CHAIN" -p tcp --dport 53 -j RETURN
     fi
 
     add_bypass_rules nat "$NAT_CHAIN"
@@ -251,6 +254,10 @@ setup_udp_nat() {
     ipt -t nat -A "$UDP_NAT_CHAIN" ! -o "$LAN_IF" -j RETURN
     ipt -t nat -A "$UDP_NAT_CHAIN" ! -s "$LAN_CIDR" -j RETURN
     ipt -t nat -A "$UDP_NAT_CHAIN" -d "$LAN_CIDR" -j RETURN
+    # 关闭 SmartDNS 时让直连 TCP DNS 的返回流量仍经过本机。
+    if [ "$DNS_ENABLED" = "0" ]; then
+        ipt -t nat -A "$UDP_NAT_CHAIN" -p tcp --dport 53 -j MASQUERADE
+    fi
     ipt -t nat -A "$UDP_NAT_CHAIN" -p udp -j MASQUERADE
 
     ipt -t nat -I POSTROUTING 1 -m comment --comment "$UDP_NAT_COMMENT" -j "$UDP_NAT_CHAIN"
@@ -266,6 +273,10 @@ setup_forward_rules() {
 
     ipt -t filter -A "$FWD_CHAIN" -i "$LAN_IF" -o "$LAN_IF" -d "$LAN_CIDR" \
         -p udp -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    if [ "$DNS_ENABLED" = "0" ]; then
+        ipt -t filter -A "$FWD_CHAIN" -i "$LAN_IF" -o "$LAN_IF" -d "$LAN_CIDR" \
+            -p tcp --sport 53 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    fi
 
     ipt -t filter -A "$FWD_CHAIN" ! -i "$LAN_IF" -j RETURN
     ipt -t filter -A "$FWD_CHAIN" ! -s "$LAN_CIDR" -j RETURN
@@ -283,6 +294,9 @@ setup_forward_rules() {
     IFS="$old_ifs"
 
     ipt -t filter -A "$FWD_CHAIN" -p udp -j ACCEPT
+    if [ "$DNS_ENABLED" = "0" ]; then
+        ipt -t filter -A "$FWD_CHAIN" -p tcp --dport 53 -j ACCEPT
+    fi
     ipt -t filter -A "$FWD_CHAIN" -p tcp -j REJECT --reject-with tcp-reset
     ipt -t filter -A "$FWD_CHAIN" -j RETURN
 
