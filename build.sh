@@ -32,7 +32,7 @@ command -v go >/dev/null 2>&1 || { echo "ERROR: 未找到 go" >&2; exit 1; }
 mkdir -p "$GO_BUILD_DIR"
 
 if [[ "$BUILD_DOCKER" -eq 1 ]]; then
-    for file in docker-compose.yml env.exmples setup-host.sh; do
+    for file in docker-compose.yml env.example setup-host.sh; do
         [[ -f "${DEPLOY_SOURCE}/${file}" ]] || { echo "ERROR: 找不到部署文件: ${DEPLOY_SOURCE}/${file}" >&2; exit 1; }
     done
 
@@ -73,7 +73,6 @@ build_image() {
 prepare_deploy() {
     local suffix="$1"
     local target="${DEPLOY_DIR}/linux-${suffix}"
-    local env_temp
 
     mkdir -p "$target/config"
     cp "${DEPLOY_SOURCE}/docker-compose.yml" "$target/docker-compose.yml"
@@ -92,23 +91,14 @@ prepare_deploy() {
         done
     fi
 
-    # 自动生成架构相关的 .env，重建时保留 LAN 等部署参数。
-    env_temp="$(mktemp "${target}/.env.XXXXXX")"
+    # 只生成环境配置模板；部署者修改后手动 mv env.example .env。
+    # 不自动创建或覆盖已有的 .env，避免覆盖用户部署配置。
     {
         printf 'IMAGE_VERSION=%s\nIMAGE_ARCH=%s\n' "$VERSION" "$suffix"
-        if [[ -f "$target/.env" ]]; then
-            awk '!/^(IMAGE_VERSION|IMAGE_ARCH|COMPOSE_PROFILES|DNS_ENABLED)=/' "$target/.env"
-        else
-            cat "${DEPLOY_SOURCE}/env.exmples"
-        fi
-    } > "$env_temp"
-    chmod 600 "$env_temp"
-    mv -f "$env_temp" "$target/.env"
-
-    {
-        printf 'IMAGE_VERSION=%s\nIMAGE_ARCH=%s\n' "$VERSION" "$suffix"
-        cat "${DEPLOY_SOURCE}/env.exmples"
-    } > "$target/.env.example"
+        cat "${DEPLOY_SOURCE}/env.example"
+    } > "$target/env.example"
+    # 清理旧版构建生成的隐藏模板，避免两个模板同时存在。
+    rm -f -- "$target/.env.example"
 
     echo "==> Deploy: ${target}"
     [[ -f "$target/config/config.json" ]] || echo "    NOTICE: 部署前请提供 config/config.json"
